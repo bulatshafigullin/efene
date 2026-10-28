@@ -4,7 +4,7 @@
 
 fn ttl = #m TTL
 
-fn clock @private = erlang.monotonic_time(second)
+fn clock = erlang.monotonic_time(second)
 
 fn clock_for_test = clock()
 

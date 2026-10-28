@@ -82,11 +82,11 @@ fn is_query
   case Value: is_map(Value) and maps.is_key(model, Value) and maps.is_key(where, Value)
 end
 
-fn add_join @private
+fn add_join
   case Query, Path, Type: add_join(Query, (Path, Type))
 end
 
-fn add_join @private
+fn add_join
   case Query, Join:
     Joins = maps.get(joins, Query)
     Query#{joins: Joins ++ [Join]}

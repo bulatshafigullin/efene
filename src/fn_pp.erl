@@ -78,10 +78,6 @@ maybe_update_ctx({attribute, _, export, Exports}, Ctx=#ctxt{exports=CurExports})
 maybe_update_ctx(_Node, Ctx) ->
     Ctx.
 
-function_exported(#ctxt{exports_all=true}, _, _) -> true;
-function_exported(#ctxt{exports=Exports}, Name, Arity) ->
-    maps:is_key({Name, Arity}, Exports).
-
 arity_to_list('_') -> "`_`";
 arity_to_list(V) -> integer_to_list(V).
 
@@ -332,13 +328,8 @@ pp({named_fun, _, AName, Clauses}, Ctx) ->
     above(sep([text("fn " ++ atom_to_list(AName)), pp_case_clauses(Clauses, Ctx)]),
           text("end"));
 pp({function, _, Name, Arity, Clauses}, Ctx) ->
-    IsExported = function_exported(Ctx, Name, Arity),
     % HACK: force a new line above each top level function.
-    % functions are public by default, only mark the ones that aren't
-    Header = case IsExported of
-                 true -> besidel([text("\nfn "), quote_atom(Name)]);
-                 false -> besidel([text("\nfn "), quote_atom(Name), text(" @private")])
-             end,
+    Header = besidel([text("\nfn "), quote_atom(Name)]),
     % @spec/@doc/... annotations live between the `fn` header and the clauses
     Body = abovel(pp_fn_annotations(Name, Arity, Ctx)
                   ++ [pp_case_clauses(Clauses, Ctx)]),
@@ -351,10 +342,8 @@ pp({eof, _}, _Ctx) -> empty().
 pp_fn_annotations(Name, Arity, Ctx) ->
     Specs = [pp_spec_annotation(T, Ctx)
              || T <- maps:get({Name, Arity}, Ctx#ctxt.specs, [])],
-    % visibility is already shown on the header, so skip it here
     Attrs = [pp_fn_attr(A, Ctx)
-             || A={Path, _} <- maps:get({Name, Arity}, Ctx#ctxt.fnattrs, []),
-                Path =/= [public], Path =/= [private]],
+             || A <- maps:get({Name, Arity}, Ctx#ctxt.fnattrs, [])],
     Specs ++ Attrs.
 
 pp_spec_annotation({type, _, bounded_fun, [FunType, _Constraints]}, Ctx) ->

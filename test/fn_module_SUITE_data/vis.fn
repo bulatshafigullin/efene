@@ -1,8 +1,8 @@
 fn plain case: helper(1) end
 
-fn old_style @public case: 2 end
+fn old_style case: 2 end
 
-fn helper @private
+fn helper
   @doc("internal")
   case X: X + 1
 end

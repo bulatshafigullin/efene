@@ -481,7 +481,7 @@ The compiled module contains the list of squares, not the call to **squares**.
 
 **#ct** expressions can call:
 
-* Any function in the same module, even the ones defined after it or @private, they run in a temporary copy of the module.
+* Any function in the same module, even the ones defined after it, they run in a temporary copy of the module.
 * Functions in efene modules found in the import roots (see [Import Roots](#import-roots)), they are compiled and loaded for the evaluation, if a module is only used in **#ct** expressions it's not compiled to a .beam file.
 * Functions in any Erlang module available to the compiler, like **lists** or **maps**.
 
@@ -1058,7 +1058,7 @@ A function marked `@guard` with one case and one expression is expanded in guard
 `fn name(params) @attrs = expr` is `fn name case params: expr end`:
 
     fn double(X) = X * 2
-    fn clock @private = erlang.monotonic_time(second)
+    fn clock = erlang.monotonic_time(second)
 
 ### Ok and Err
 
@@ -1103,8 +1103,6 @@ Simples function:
 
 Simple with attributes:
 
-    fn one @private case: 1 end
-
     fn two
       @doc("returns the number two")
       case: 2
@@ -1135,15 +1133,7 @@ Cases with else:
 
 #### Well Known Function Attributes
 
-##### @private
-
-Functions are public by default, they are exported and can be used from other modules, @private makes the function available only inside its module:
-
-    fn helper @private case X: X + 1 end
-
-##### @public
-
-Functions are public by default so @public is not needed, it's still accepted.
+All functions are public, they are exported and can be used from other modules. `@private` and `@public` were removed, using them is a compile error.
 
 ##### @spec
 
@@ -1157,7 +1147,7 @@ Defines the types of function arguments and return type for current function.
 
     @export(hello/0, plus/2)
 
-Exports the functions to be used from other modules, since functions are public by default it's only needed to export functions that have the @private attribute.
+Exports the functions to be used from other modules, functions are public so it's not needed for them.
 
 ##### Export Type
 

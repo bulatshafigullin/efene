@@ -1,4 +1,4 @@
-fn primes_below @public case N:
+fn primes_below case N:
   for I in lists.seq(2, N - 1); when is_prime(I): I end
 end
 

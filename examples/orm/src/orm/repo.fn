@@ -94,7 +94,7 @@ fn rollback
   case Conn, Reason: `Elixir.Postgrex`.rollback(Conn, Reason)
 end
 
-fn run @private
+fn run
   case Conn, (Sql, Params):
     match `Elixir.Postgrex`.query(Conn, Sql, Params):
       case (ok, Result): Result
@@ -103,13 +103,13 @@ fn run @private
     end
 end
 
-fn rows @private
+fn rows
   case Result:
     Columns = for C in maps.get(columns, Result): binary_to_atom(C) end
     for Row in maps.get(rows, Result): maps.from_list(lists.zip(Columns, Row)) end
 end
 
-fn nest @private
+fn nest
   @doc("{title: .., author__name: ..} -> {title: .., author: {name: ..}}")
   case Row:
     Nested = lists.foldl(fn case (Key, Value), Acc:
@@ -121,13 +121,13 @@ fn nest @private
     maps.map(fn case _Key, Value: collapse(Value) end, Nested)
 end
 
-fn deep_put @private
+fn deep_put
   case [Key], Value, Map: maps.put(Key, Value, Map)
   case Key :: Rest, Value, Map:
     maps.put(Key, deep_put(Rest, Value, maps.get(Key, Map, {})), Map)
 end
 
-fn collapse @private
+fn collapse
   @doc("a related row with all its fields null means there's no related row")
   case Value when is_map(Value):
     Collapsed = maps.map(fn case _Key, V: collapse(V) end, Value)
@@ -138,7 +138,7 @@ fn collapse @private
   case Value: Value
 end
 
-fn to_binary @private
+fn to_binary
   case Value when is_list(Value): unicode.characters_to_binary(Value)
   case Value: Value
 end

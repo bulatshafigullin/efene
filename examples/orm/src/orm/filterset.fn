@@ -46,11 +46,11 @@ fn paginate
     offset(limit(Query, Size), (maps.get(page, Pagination) - 1) * Size)
 end
 
-fn reserved @private
+fn reserved
   case: ['ordering', 'page', 'page_size']
 end
 
-fn group_params @private
+fn group_params
   @doc("[(a, 1), (b, 2), (a, 3)] -> [(a, [1, 3]), (b, [2])], keeps the order")
   case Params:
     lists.foldl(fn case (Name, Value), Acc:
@@ -61,7 +61,7 @@ fn group_params @private
                 end, [], Params)
 end
 
-fn param_values @private
+fn param_values
   case Name, Grouped:
     match lists.keyfind(Name, 1, Grouped):
       case false: []
@@ -69,7 +69,7 @@ fn param_values @private
     end
 end
 
-fn apply_param @private
+fn apply_param
   case Name, Values, Filters, Query, Errors:
     match orm.schema.find_named(Name, maps.keys(Filters)):
       case nil:
@@ -83,12 +83,12 @@ fn apply_param @private
     end
 end
 
-fn apply_target @private
+fn apply_target
   case Target, Query, Value when is_function(Target, 2): Target(Query, Value)
   case Lookup, Query, Value: filter(Query, maps.put(Lookup, Value, {}))
 end
 
-fn parse @private
+fn parse
   case (list, Type), Values:
     Items = lists.append((for V in Values: binary.split(V, ',', [global]) end))
     Parsed = for Item in Items: parse_value(Type, Item) end
@@ -101,7 +101,7 @@ fn parse @private
   case _Type, _Values: (error, 'given more than once')
 end
 
-fn parse_value @private
+fn parse_value
   case text, '': (error, 'must not be empty')
   case text, Value: (ok, Value)
   case int, Value:
@@ -133,13 +133,13 @@ fn parse_value @private
     end
 end
 
-fn cents @private
+fn cents
   case '': 0
   case #b {D: 8}: (D - #c "0") * 10
   case Fraction: binary_to_integer(Fraction)
 end
 
-fn apply_ordering @private
+fn apply_ordering
   case [], FilterSet, Query, Errors:
     Pk = orm.schema.primary_key(maps.get(model, Query))
     (order_by(Query, maps.get(default_ordering, FilterSet, []) ++ [Pk]), Errors)
@@ -158,7 +158,7 @@ fn apply_ordering @private
     (Query, ('ordering', 'given more than once') :: Errors)
 end
 
-fn ordering_item @private
+fn ordering_item
   @doc("price -> (asc, price_cents), -price -> (desc, price_cents), the name
   has to be in the ordering of the filterset")
   case Item, Allowed:
@@ -172,7 +172,7 @@ fn ordering_item @private
     end
 end
 
-fn int_param @private
+fn int_param
   case Name, Grouped, Default, Min, Max, Errors:
     match param_values(Name, Grouped):
       case []: (Default, Errors)
@@ -186,12 +186,12 @@ fn int_param @private
     end
 end
 
-fn range_message @private
+fn range_message
   case Min, nil: iolist_to_binary(io_lib.format("must be at least ~p", [Min]))
   case Min, Max: iolist_to_binary(io_lib.format("must be between ~p and ~p", [Min, Max]))
 end
 
-fn unknown @private
+fn unknown
   case What, Names:
     Sorted = lists.sort((for N in Names: orm.schema.to_binary(N) end))
     iolist_to_binary(['unknown ', What, ', use one of: ', lists.join(', ', Sorted)])

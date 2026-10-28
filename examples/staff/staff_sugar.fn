@@ -31,7 +31,7 @@ fn login
     end
 end
 
-fn open_session @private
+fn open_session
   case _, _, Session, {roles = []}:
     django("logout", {'session': Session})
     err(forbidden)
@@ -111,7 +111,7 @@ end
 
 fn is_session @guard case S: is_binary(S) and S != '' end
 
-fn django @private
+fn django
   @doc("One call to Django: ok(Body) on 200, the console-level errors for the statuses Django
     uses on purpose, unavailable for anything else (down, misconfigured, a 5xx) -- which must
     not read as wrong password. Only Django's own 401 is wrong login; a 400 never reached the check.")
@@ -122,7 +122,7 @@ fn django @private
     end
 end
 
-fn post @private
+fn post
   case Action, Payload, Base, Key:
     Opts = [(url, string.trim(Base, trailing, "/") ++ "/" ++ Action), (retry, false),
             (receive_timeout, 10000), (headers, [('x-internal-key', Key)])]
@@ -138,35 +138,35 @@ fn post @private
     end
 end
 
-fn principal_from(Body) @private =
+fn principal_from(Body) =
   {id: id_string(Body['sub']), name: Body['name', nil],
    roles: wrap(Body['roles', []])}
 
-fn id_string @private
+fn id_string
   case I when is_integer(I): integer_to_binary(I)
   case B: B
 end
 
-fn wrap @private
+fn wrap
   case nil: []
   case L when is_list(L): L
   case X: [X]
 end
 
-fn config(Key) @private =
+fn config(Key) =
   match application.get_env(moderation, Key):
     case ok(V) when is_binary(V), V != '': ok(V)
     else: error
   end
 
-fn clock @private = erlang.monotonic_time(second)
-fn cache_key(Session) @private = crypto.hash(sha256, Session)
-fn counts_key(Session) @private = cache_key('counts:#{Session}')
-fn cached(Session) @private = lookup(cache_key(Session))
-fn remember(Session, Principal) @private = store(cache_key(Session), Principal, #m CACHE_SECONDS)
-fn forget(Session) @private = try! ets.delete(#m TABLE, cache_key(Session)) else ok
+fn clock = erlang.monotonic_time(second)
+fn cache_key(Session) = crypto.hash(sha256, Session)
+fn counts_key(Session) = cache_key('counts:#{Session}')
+fn cached(Session) = lookup(cache_key(Session))
+fn remember(Session, Principal) = store(cache_key(Session), Principal, #m CACHE_SECONDS)
+fn forget(Session) = try! ets.delete(#m TABLE, cache_key(Session)) else ok
 
-fn lookup @private
+fn lookup
   case Key:
     Now = clock()
     try!
@@ -177,11 +177,11 @@ fn lookup @private
     else miss
 end
 
-fn store(Key, Value, Seconds) @private =
+fn store(Key, Value, Seconds) =
   try! ets.insert(#m TABLE, (Key, Value, clock() + Seconds)) else ok
 
-fn audit(UserId, Action, Details) @private =
+fn audit(UserId, Action, Details) =
   moderation.repo.insert(moderation.schemas.access_log.new(
     {moderator_id: UserId, action: Action, details: Details}))
 
-fn inspect(X) @private = io_lib.format("~P", [X, 3])
+fn inspect(X) = io_lib.format("~P", [X, 3])

@@ -12,7 +12,7 @@
 @type(a) -> boolean()
 @type(a) -> integer()
 
-fn revoke_bucket @public
+fn revoke_bucket
   @spec(any(), any(), any(), any()) -> foo()
   case Conf, Bucket, Username, Permission
          when Permission is get, Permission is put,
@@ -37,7 +37,7 @@ fn length case A: 1 end
 
 fn length case A: 2 end
 
-fn more_errors @public case P when length([]):
+fn more_errors case P when length([]):
     A = 'a'
     B = #b [{val: A, size: 8}] = #b [{val: A, size: 8}]
     B1 = #b [{val: A}, {val: A, size: 8}]
@@ -55,7 +55,7 @@ fn more_errors @public case P when length([]):
     R
 end
 
-fn bad_guard @public case A when now() > 0: ok end
+fn bad_guard case A when now() > 0: ok end
 
 fn bad_record_info case A:
     record_info(fields, A)

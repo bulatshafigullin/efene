@@ -1,6 +1,6 @@
-fn main @public case:
+fn main case:
   New = fn shapes.geo.point.new:2
   (shapes.area(2), New(1, 2), lists.reverse([1, 2]), #i module)
 end
 
-fn upper @public case S: text.upper.up(S) end
+fn upper case S: text.upper.up(S) end

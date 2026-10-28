@@ -317,7 +317,7 @@ fn tagged_values
         print("this print is at line ~p in module ~p", [#i line, #i module])
 end
 
-fn main @public
+fn main
     case:
         print("hi")
         print("hi ~p", ["bob"])

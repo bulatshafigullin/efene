@@ -31,7 +31,7 @@ guard_fns(_Config) ->
 
 fn_shorthand(_Config) ->
     8 = sugar:double(4),
-    false = lists:member({clock, 0}, sugar:module_info(exports)),
+    true = lists:member({clock, 0}, sugar:module_info(exports)),
     true = is_integer(sugar:clock_for_test()).
 
 default_arguments(_Config) ->

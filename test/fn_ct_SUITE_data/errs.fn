@@ -1,4 +1,4 @@
-fn uses_var @public case X: #ct (X + 1) end
-fn raises @public case: #ct boom() end
-fn gives_fun @public case: #ct (fn case: 1 end) end
+fn uses_var case X: #ct (X + 1) end
+fn raises case: #ct boom() end
+fn gives_fun case: #ct (fn case: 1 end) end
 fn boom case: erlang.error(kaboom) end

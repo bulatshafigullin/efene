@@ -3,7 +3,7 @@
 
 all() -> [compiles_used_modules_from_file_dir, extra_roots,
           compiled_file_is_named_after_file, variable_in_module_path_is_an_error,
-          functions_are_public_by_default, imports_nested_modules].
+          all_functions_are_public, private_is_removed, imports_nested_modules].
 
 init_per_testcase(_Case, Config) ->
     OutDir = filename:join(proplists:get_value(priv_dir, Config),
@@ -49,13 +49,17 @@ variable_in_module_path_is_an_error(Config) ->
     {error, {efene, bad_path, [Msg]}} = efene:to_mod(data_path(Config, "bad_path.fn")),
     {match, _} = re:run(Msg, "invalid_module_path").
 
-functions_are_public_by_default(Config) ->
+all_functions_are_public(Config) ->
     {ok, Forms} = efene:to_mod(data_path(Config, "vis.fn")),
     [Exports] = [E || {attribute, _, export, E} <- Forms],
-    [{old_style, 0}, {plain, 0}] = lists:sort(Exports),
+    [{helper, 1}, {old_style, 0}, {plain, 0}] = lists:sort(Exports),
     Fmt = efene:to_efene(data_path(Config, "vis.fn")),
-    {match, _} = re:run(Fmt, "fn helper @private"),
+    nomatch = re:run(Fmt, "@private"),
     nomatch = re:run(Fmt, "@public").
+
+private_is_removed(Config) ->
+    {error, {efene, private, [Msg]}} = efene:to_mod(data_path(Config, "private.fn")),
+    {match, _} = re:run(Msg, "were removed").
 
 imports_nested_modules(Config) ->
     {ok, Info} = compile(Config, "proj/imports.fn", []),

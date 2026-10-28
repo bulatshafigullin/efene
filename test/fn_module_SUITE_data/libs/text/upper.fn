@@ -1,1 +1,1 @@
-fn up @public case S: string.uppercase(S) end
+fn up case S: string.uppercase(S) end

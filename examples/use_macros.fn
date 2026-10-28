@@ -1,6 +1,6 @@
 @include("examples/ms.hrl")
 
-fn main @public case:
+fn main case:
     a_function_in_the_macro_file = what_am_i()
     "bob" = #m AUTHOR
     2 * 3 = #m Const

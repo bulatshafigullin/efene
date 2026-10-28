@@ -499,8 +499,19 @@ split_by_arity(Cases) ->
 case_arity({cmatch, _, {Conds, _, _}}, _Order) -> length(Conds);
 case_arity({celse, _, _}, Order) -> lists:last(Order).
 
-top_level_fn(Line, Name, Attrs, Cases, #{level := 0, fns := Fns, fns_by_name := FnsByName,
-                                         module := Module, path := Path}=State) ->
+top_level_fn(Line, Name, Attrs, Cases, State0) ->
+    State = check_removed_attrs(Line, Attrs, State0),
+    top_level_fn1(Line, Name, Attrs, Cases, State).
+
+check_removed_attrs(Line, Attrs, State) ->
+    lists:foldl(fun ({attr, _, [?Atom(V)], _, _}, S) when V == private orelse V == public ->
+                        add_error(S, removed_attribute, Line,
+                                  {message, "@private and @public were removed, all functions are public"});
+                    (_, S) -> S
+                end, State, Attrs).
+
+top_level_fn1(Line, Name, Attrs, Cases, #{level := 0, fns := Fns, fns_by_name := FnsByName,
+                                          module := Module, path := Path}=State) ->
     [FirstCase|_TCases] = Cases,
     {cmatch, _FCLine, {FCCond, _FCWhen, _FCBody}} = FirstCase,
     Arity = length(FCCond),
@@ -597,9 +608,7 @@ expand_defaults(Line, Name, Attrs, [{cmatch, _, {Params, _, _}}|_]=Cases) ->
                 [] ->
                     Names = arg_names(Required ++ [P || {default, _, P, _} <- Optional]),
                     Defaults = [D || {default, _, _, D} <- Optional],
-                    Visibility = [A || {attr, _, [?Atom(V)], _, _}=A <- Attrs,
-                                       V == private orelse V == public],
-                    Extras = [default_arity_fn(Line, Name, Visibility, Names, Defaults,
+                    Extras = [default_arity_fn(Line, Name, Names, Defaults,
                                                length(Required), N)
                               || N <- lists:seq(length(Required), length(Params) - 1)],
                     {ok, strip_defaults(Cases), Extras}
@@ -631,14 +640,14 @@ arg_names(Params) ->
 
 generated_arg(I) -> list_to_atom("_Arg" ++ integer_to_list(I)).
 
-default_arity_fn(Line, Name, Visibility, Names, Defaults, NRequired, N) ->
+default_arity_fn(Line, Name, Names, Defaults, NRequired, N) ->
     Given = lists:sublist(Names, N),
     DefaultsUsed = lists:nthtail(N - NRequired, Defaults),
     Params = [?V(Line, var, V) || V <- Given],
     Args = Params ++ DefaultsUsed,
     Call = ?E(Line, call, {[Name], Args}),
     Cases = ?E(Line, 'case', [{cmatch, Line, {Params, nowhen, [Call]}}]),
-    ?E(Line, fn, {Name, Visibility, Cases}).
+    ?E(Line, fn, {Name, [], Cases}).
 
 with_to_ast(Line, Items, Body, Else, State) ->
     {ElseVar, Prelude, State1} = with_else(Line, Else, State),

@@ -43,7 +43,7 @@ fn lookup
     (lookup, iolist_to_binary(lists.join('__', Parts)), Value)
 end
 
-fn path_parts @private
+fn path_parts
   case Path when is_atom(Path) or is_binary(Path): [orm.schema.to_binary(Path)]
   case Path:
     match io_lib.printable_unicode_list(Path):

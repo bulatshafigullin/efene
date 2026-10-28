@@ -3,9 +3,9 @@ fn ttl_seconds
   case: 12 * 3600
 end
 
-fn cache_seconds @private case: 15 end
-fn counts_cache_seconds @private case: 5 end
-fn table @private case: moderation_staff_sessions end
+fn cache_seconds case: 15 end
+fn counts_cache_seconds case: 5 end
+fn table case: moderation_staff_sessions end
 
 fn login
   case Login, Password: login(Login, Password, {})
@@ -34,7 +34,7 @@ fn login
     end
 end
 
-fn open_session @private
+fn open_session
   case _, _, Session, {roles = []}:
     django("logout", {'session': Session})
     (error, forbidden)
@@ -117,7 +117,7 @@ fn reset
     ok
 end
 
-fn django @private
+fn django
   @doc("One call to Django: (ok, Body) on 200, the console-level errors for the statuses Django
     uses on purpose, unavailable for anything else (down, misconfigured, a 5xx) -- which must
     not read as wrong password. Only Django's own 401 is wrong login; a 400 never reached the check.")
@@ -132,7 +132,7 @@ fn django @private
     end
 end
 
-fn post @private
+fn post
   case Action, Payload, Base, Key:
     Url = string.trim(Base, trailing, "/") ++ "/" ++ Action
     Opts = [(url, Url), (retry, false), (receive_timeout, 10000), ('headers', [('x-internal-key', Key)])]
@@ -148,22 +148,22 @@ fn post @private
     end
 end
 
-fn principal_from @private
+fn principal_from
   case Body: {id: id_string(maps.get('sub', Body)), name: maps.get('name', Body, nil), roles: wrap(maps.get('roles', Body, []))}
 end
 
-fn id_string @private
+fn id_string
   case I when is_integer(I): integer_to_binary(I)
   case B: B
 end
 
-fn wrap @private
+fn wrap
   case nil: []
   case L when is_list(L): L
   case X: [X]
 end
 
-fn config @private
+fn config
   case Key:
     match application.get_env(moderation, Key):
       case ok, V when is_binary(V), V != '': (ok, V)
@@ -171,20 +171,20 @@ fn config @private
     end
 end
 
-fn cache_key @private
+fn cache_key
   @doc("Keyed by a hash so a dump of the table holds no usable session key.")
   case Session: crypto.hash(sha256, Session)
 end
 
-fn clock @private case: erlang.monotonic_time(second) end
+fn clock case: erlang.monotonic_time(second) end
 
-fn counts_key @private
+fn counts_key
   case Session: cache_key(iolist_to_binary(["counts:", Session]))
 end
 
-fn cached @private case Session: lookup(cache_key(Session)) end
+fn cached case Session: lookup(cache_key(Session)) end
 
-fn safe @private
+fn safe
   @doc("ETS table not there yet (or gone): the cache is only an optimisation, so fall back.")
   case F, Default:
     try F()
@@ -192,7 +192,7 @@ fn safe @private
     end
 end
 
-fn lookup @private
+fn lookup
   case Key:
     safe(fn case:
       Now = clock()
@@ -203,20 +203,20 @@ fn lookup @private
     end, miss)
 end
 
-fn store @private
+fn store
   case Key, Value, Seconds:
     safe(fn case: ets.insert(table(), (Key, Value, clock() + Seconds)) end, ok)
 end
 
-fn remember @private
+fn remember
   case Session, Principal: store(cache_key(Session), Principal, cache_seconds())
 end
 
-fn forget @private
+fn forget
   case Session: safe(fn case: ets.delete(table(), cache_key(Session)) end, ok)
 end
 
-fn audit @private
+fn audit
   case UserId, Action, Details:
     moderation.repo.insert(moderation.schemas.access_log.new(
       {moderator_id: UserId, action: Action, details: Details}))

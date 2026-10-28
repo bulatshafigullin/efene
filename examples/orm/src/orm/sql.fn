@@ -52,14 +52,14 @@ fn insert
     (iolist_to_binary(Sql), params(St))
 end
 
-fn field_values @private
+fn field_values
   @doc("a map of field to value as a sorted list with the fields as declared,
   keys can be atoms, binaries or strings")
   case Model, Values:
     lists.sort((for (K, V) in maps.to_list(Values): (orm.schema.field(Model, K), V) end))
 end
 
-fn update_value @private
+fn update_value
   @doc("in UPDATE ... SET the columns are not qualified with an alias")
   case (f, Key), St:
     Model = maps.get(model, St)
@@ -67,7 +67,7 @@ fn update_value @private
   case Value, St: param(Value, St)
 end
 
-fn pk_select @private
+fn pk_select
   @doc("SELECT of the primary keys of the rows Query returns, used as a subquery
   by update and delete so they work with joins, ordering and limits")
   case Query:
@@ -76,7 +76,7 @@ fn pk_select @private
     select_iodata(PkQuery, new_state(Model))
 end
 
-fn select_iodata @private
+fn select_iodata
   case Query, St0:
     Model = maps.get(model, Query)
     Joins = maps.get(joins, Query)
@@ -92,11 +92,11 @@ fn select_iodata @private
     (Sql, St5)
 end
 
-fn new_state @private
+fn new_state
   case Model: state(Model, 't', [], 0)
 end
 
-fn state @private
+fn state
   @doc("compilation state of one SELECT, params and subs are shared with the
   nested SELECTs (subqueries and CTEs) so the placeholders and aliases are unique")
   case Model, Prefix, Params, Subs:
@@ -106,11 +106,11 @@ fn state @private
      ctes: [], cte_names: [], virtual: {}, join_conds: {}, group_by: [], outputs: []}
 end
 
-fn alias_name @private
+fn alias_name
   case Prefix, N: iolist_to_binary([Prefix, integer_to_binary(N)])
 end
 
-fn nested_select @private
+fn nested_select
   @doc("compile Query as a SELECT nested in the one of St, a correlated one can
   use orm.q.ref/1 to refer to the columns of St")
   case Query, St, Correlated:
@@ -129,7 +129,7 @@ fn nested_select @private
     (Sql, Parent#{params: maps.get(params, Child2), subs: maps.get(subs, Child2)})
 end
 
-fn single_column_select @private
+fn single_column_select
   @doc("a subquery used as a value returns one column, the primary key unless
   it selects values")
   case Query, St:
@@ -142,12 +142,12 @@ fn single_column_select @private
     (['(', Sql, ')'], St1)
 end
 
-fn ensure_cte_model @private
+fn ensure_cte_model
   case (cte, Name, Query), St: ensure_cte((cte, Name, Query), St)
   case _Model, St: St
 end
 
-fn ensure_cte @private
+fn ensure_cte
   @doc("add the CTE to the WITH clause of this SELECT if it's not there yet")
   case (cte, Name, Query), St:
     Names = maps.get(cte_names, St)
@@ -160,7 +160,7 @@ fn ensure_cte @private
     end
 end
 
-fn with_sql @private
+fn with_sql
   case St:
     match maps.get(ctes, St):
       case []: []
@@ -168,7 +168,7 @@ fn with_sql @private
     end
 end
 
-fn register_join @private
+fn register_join
   @doc("remember the ON conditions of the joins and the joins with a name
   (join_as and join_cte), before resolving any path")
   case (_Path, _Type), St: St
@@ -181,23 +181,23 @@ fn register_join @private
     add_virtual(orm.schema.table(Cte), (cte, Cte, On), St)
 end
 
-fn add_virtual @private
+fn add_virtual
   case Name, Spec, St:
     St#{virtual: maps.put(orm.schema.to_binary(Name), (Name, Spec), maps.get(virtual, St))}
 end
 
-fn apply_join @private
+fn apply_join
   case (Path, Type), Model, St: ensure_join(relation_names(Model, split_key(Path)), Type, St)
   case (Path, Type, _Cond), Model, St: ensure_join(relation_names(Model, split_key(Path)), Type, St)
   case (as, Name, _Relation, Type, _Cond), _Model, St: ensure_join([Name], Type, St)
   case (cte, Cte, Type, _On), _Model, St: ensure_join([orm.schema.table(Cte)], Type, St)
 end
 
-fn params @private
+fn params
   case St: lists.reverse(maps.get(params, St))
 end
 
-fn param @private
+fn param
   @doc("add a query parameter, returns its placeholder ($1, $2...)")
   case Value, St:
     Params = maps.get(params, St)
@@ -205,7 +205,7 @@ fn param @private
     (['$', integer_to_binary(N)], St#{params: encode(Value) :: Params})
 end
 
-fn encode @private
+fn encode
   @doc("efene strings are lists, the driver wants binaries")
   case [] : []
   case Value when is_list(Value):
@@ -216,27 +216,27 @@ fn encode @private
   case Value: Value
 end
 
-fn quote @private
+fn quote
   case Name when is_atom(Name): ['"', atom_to_binary(Name), '"']
   case Name: ['"', Name, '"']
 end
 
-fn column @private
+fn column
   case Alias, Field: [quote(Alias), '.', quote(Field)]
 end
 
-fn split_key @private
+fn split_key
   @doc("author__name__startswith -> [<<author>>, <<name>>, <<startswith>>], the
   parts stay binaries, they are matched against the schema, keys may come from
   user input and atoms are never garbage collected")
   case Key: binary.split(orm.schema.to_binary(Key), '__', [global])
 end
 
-fn lookup_named @private
+fn lookup_named
   case Bin: orm.schema.find_named(Bin, lookups())
 end
 
-fn relation_names @private
+fn relation_names
   @doc("validate a path of relation names starting at Model, returns them as atoms")
   case _Model, []: []
   case Model, Seg :: Rest:
@@ -248,16 +248,16 @@ fn relation_names @private
     end
 end
 
-fn lookups @private
+fn lookups
   case: [exact, iexact, ne, contains, icontains, startswith, istartswith,
          endswith, iendswith, gt, gte, lt, lte, `in`, isnull, range]
 end
 
-fn alias_of @private
+fn alias_of
   case Path, St: maps.get(Path, maps.get(aliases, St))
 end
 
-fn ensure_join @private
+fn ensure_join
   @doc("join the relations in Path (a list of relation names) if they are not
   joined yet, parents first")
   case [], _Type, St: St
@@ -271,13 +271,13 @@ fn ensure_join @private
     end
 end
 
-fn virtual_relation @private
+fn virtual_relation
   @doc("the join_as/join_cte relation named Seg, they only exist at the root")
   case [], Seg, St: maps.get(orm.schema.to_binary(Seg), maps.get(virtual, St), nil)
   case _Path, _Seg, _St: nil
 end
 
-fn relation_spec @private
+fn relation_spec
   @doc("how to join Path: (schema, Relation, OnCond) or (cte, Cte, On)")
   case Path, St:
     Parent = lists.droplast(Path)
@@ -298,7 +298,7 @@ fn relation_spec @private
     end
 end
 
-fn add_join @private
+fn add_join
   case Path, Parent, Type, St:
     match maps.get(no_joins, St):
       case true: erlang.error((orm_join_in_join_condition, Path))
@@ -319,7 +319,7 @@ fn add_join @private
     St3#{joins: maps.get(joins, St3) ++ [JoinSql]}
 end
 
-fn on_sql @private
+fn on_sql
   case (schema, (belongs_to, Target, Fk), Cond), Alias, PAlias, _PModel, Path, St:
     with_join_cond([column(Alias, orm.schema.primary_key(Target)), ' = ', column(PAlias, Fk)],
                    Cond, Path, St)
@@ -335,7 +335,7 @@ fn on_sql @private
     (lists.join(' AND ', Parts), St1)
 end
 
-fn with_join_cond @private
+fn with_join_cond
   @doc("add the join's own conditions to ON, their keys are fields of the joined
   model, they can't join more relations")
   case On, nil, _Path, St: (On, St)
@@ -346,17 +346,17 @@ fn with_join_cond @private
     ([On, ' AND ', Sql], maps.merge(St1, Saved))
 end
 
-fn join_keyword @private
+fn join_keyword
   case inner: ' INNER JOIN '
   case left: ' LEFT JOIN '
 end
 
-fn resolve_path @private
+fn resolve_path
   @doc("column for a path of relations ending in a field, joining the relations")
   case Segments, JoinType, St: walk(Segments, maps.get(base, St), JoinType, St)
 end
 
-fn name_in @private
+fn name_in
   @doc("Seg as a field or relation of the model at Path, including join_as and
   join_cte relations at the root")
   case Model, Path, Seg, St:
@@ -366,7 +366,7 @@ fn name_in @private
     end
 end
 
-fn walk @private
+fn walk
   @doc("Segments are binaries, Path the relations walked so far")
   case [Seg], Path, JoinType, St:
     (Alias, Model) = alias_of(Path, St)
@@ -399,7 +399,7 @@ fn walk @private
     end
 end
 
-fn join_type @private
+fn join_type
   @doc("relations in conditions are inner joined, left joined for isnull and
   inside OR and NOT, an inner join there would drop the rows without related
   rows before the other conditions are checked")
@@ -411,7 +411,7 @@ fn join_type @private
     end
 end
 
-fn resolve_lookup @private
+fn resolve_lookup
   @doc("age__gte -> (column of age, gte), name -> (column of name, exact)")
   case Key, St:
     Parts = split_key(Key)
@@ -423,7 +423,7 @@ fn resolve_lookup @private
     (Col, Lookup, St1)
 end
 
-fn select_columns @private
+fn select_columns
   case Query, St:
     match maps.get(select, Query):
       case all:
@@ -444,7 +444,7 @@ fn select_columns @private
     end
 end
 
-fn value_column @private
+fn value_column
   @doc("(ColumnSql, Expr, plain | aggregate) for a values key")
   case (Fn, Key, Alias), St:
     (Col, St1) = match Key:
@@ -459,7 +459,7 @@ fn value_column @private
     (([Col, ' AS ', quote(orm.schema.output_name(Key))], Col, plain), St1)
 end
 
-fn aggregate @private
+fn aggregate
   case count, Col: ['COUNT(', Col, ')']
   case count_distinct, Col: ['COUNT(DISTINCT ', Col, ')']
   case sum, Col: ['SUM(', Col, ')']
@@ -469,7 +469,7 @@ fn aggregate @private
   case Fn, _Col: erlang.error((orm_unknown_aggregate, Fn))
 end
 
-fn group_by_sql @private
+fn group_by_sql
   case St:
     match maps.get(group_by, St):
       case []: []
@@ -477,7 +477,7 @@ fn group_by_sql @private
     end
 end
 
-fn related_columns @private
+fn related_columns
   @doc("columns of a select_related path aliased as path__field")
   case Path, St:
     Names = relation_names(maps.get(model, St), split_key(Path))
@@ -491,14 +491,14 @@ fn related_columns @private
     (Cols, St1)
 end
 
-fn where_sql @private
+fn where_sql
   case [], St: ([], St)
   case Where, St:
     (Sql, St1) = cond_sql((all, Where), St)
     ([' WHERE ', Sql], St1)
 end
 
-fn cond_sql @private
+fn cond_sql
   case (all, []), St: ('TRUE', St)
   case (all, Nodes), St: join_nodes(Nodes, ' AND ', St)
   case (any, []), St: ('FALSE', St)
@@ -520,7 +520,7 @@ fn cond_sql @private
     (null_guard(Lookup, Value, Col, Sql, maps.get(negated, St2)), St2)
 end
 
-fn null_guard @private
+fn null_guard
   @doc("in SQL NOT (col = 1) is NULL (not true) when col is NULL, so a negated
   comparison also checks the column is not null, like django's exclude does")
   case isnull, _Value, _Col, Sql, _Negated: Sql
@@ -529,14 +529,14 @@ fn null_guard @private
   case _Lookup, _Value, _Col, Sql, false: Sql
 end
 
-fn join_nodes @private
+fn join_nodes
   case [Node], _Sep, St: cond_sql(Node, St)
   case Nodes, Sep, St:
     (Parts, St1) = lists.mapfoldl(fn cond_sql:2, St, Nodes)
     (['(', lists.join(Sep, Parts), ')'], St1)
 end
 
-fn value_sql @private
+fn value_sql
   @doc("SQL for a lookup value: a parameter, a column of this row (orm.q.f), a
   column of the outer query (orm.q.ref) or a subquery")
   case (f, Key), St: resolve_path(split_key(Key), join_type(exact, St), St)
@@ -554,7 +554,7 @@ fn value_sql @private
     end
 end
 
-fn lookup_sql @private
+fn lookup_sql
   case exact, Col, nil, St: ([Col, ' IS NULL'], St)
   case exact, Col, Value, St: binop(Col, ' = ', Value, St)
   case ne, Col, nil, St: ([Col, ' IS NOT NULL'], St)
@@ -587,31 +587,31 @@ fn lookup_sql @private
     ([Col, ' BETWEEN ', V1, ' AND ', V2], St2)
 end
 
-fn binop @private
+fn binop
   case Col, Op, Value, St:
     (V, St1) = value_sql(Value, St)
     ([Col, Op, V], St1)
 end
 
-fn like @private
+fn like
   case Col, Op, Pattern, St: binop(Col, Op, iolist_to_binary(Pattern), St)
 end
 
-fn like_escape @private
+fn like_escape
   @doc("escape the LIKE wildcards in Value, returns a binary")
   case Value:
     Bin = unicode.characters_to_binary(Value)
     re.replace(Bin, "[\\\\%_]", "\\\\&", [global, (return, binary)])
 end
 
-fn order_sql @private
+fn order_sql
   case [], St: ([], St)
   case Items, St:
     (Parts, St1) = lists.mapfoldl(fn order_item:2, St, Items)
     ([' ORDER BY ', lists.join(', ', Parts)], St1)
 end
 
-fn order_item @private
+fn order_item
   case (desc, Key), St: order_column(Key, ' DESC', St)
   case (asc, Key), St: order_column(Key, ' ASC', St)
   case Key, St when is_atom(Key): order_column(Key, ' ASC', St)
@@ -622,7 +622,7 @@ fn order_item @private
     end
 end
 
-fn order_column @private
+fn order_column
   @doc("order by a selected values key (aggregates included) or a field path")
   case Key, Dir, St:
     KeyBin = orm.schema.to_binary(Key)
@@ -634,7 +634,7 @@ fn order_column @private
     end
 end
 
-fn distinct_sql @private
+fn distinct_sql
   case Query:
     match maps.get(distinct, Query):
       case true: 'DISTINCT '
@@ -642,7 +642,7 @@ fn distinct_sql @private
     end
 end
 
-fn limit_sql @private
+fn limit_sql
   case Query:
     Limit = match maps.get(limit, Query):
       case nil: []

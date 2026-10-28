@@ -1,1 +1,1 @@
-fn area @public case R: R * R end
+fn area case R: R * R end

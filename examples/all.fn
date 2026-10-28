@@ -17,7 +17,7 @@
 
 fn load case: io.format("loaded~n") end
 
-fn types @public
+fn types
   @doc("function that explored efene types")
 
   case int:
@@ -292,24 +292,24 @@ fn types @public
     end
 end
 
-fn identity @public
+fn identity
   case X:
     X
 end
 
 fn test1 case: [] end
-fn test2 @public case: [] end
-fn test3 @public @doc("hi") case: [] end
+fn test2 case: [] end
+fn test3 @doc("hi") case: [] end
 
 fn test4
     case: []
 end
 
-fn test5 @public
+fn test5
     case: []
 end
 
-fn test6 @public
+fn test6
     @doc("hi")
     case: []
 end
@@ -319,12 +319,10 @@ fn test7
 end
 
 fn test8
-    @public
     case: []
 end
 
 fn test9
-    @public
     @doc("hi")
     case: []
 end
@@ -335,10 +333,10 @@ fn test10
 end
 
 fn test11 case A: when A < 10: low else: hi end end
-fn test12 @public case A: when A < 10: low else: hi end end
-fn test13 @public @doc("hi") case A: when A < 10: low else: hi end end
+fn test12 case A: when A < 10: low else: hi end end
+fn test13 @doc("hi") case A: when A < 10: low else: hi end end
 
-fn test14 @public
+fn test14
     case A
            when A is a,
                 A is b,
@@ -346,32 +344,32 @@ fn test14 @public
         A
 end
 
-fn test15 @public
+fn test15
     case A when A is a,
                 A is b,
                 A is c:
         A
 end
 
-fn test16 @public
+fn test16
     case A when A is a, A is b,
                 A is c:
         A
 end
 
-fn test17 @public
+fn test17
     case A when A is a, A is b, A is c:
         A
 end
 
-fn test18 @public
+fn test18
     case A when A is a, A is b, A is c: A
 end
 
-fn test19 @public case A when A is a, A is b, A is c: A
+fn test19 case A when A is a, A is b, A is c: A
 end
 
-fn test20 @public case A when A is a, A is b, A is c: A end
+fn test20 case A when A is a, A is b, A is c: A end
 
 fn my_xor case V1, V2:
 
