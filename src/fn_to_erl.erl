@@ -142,23 +142,21 @@ ast_to_ast({attr, Line, [?Atom(AttrName)], [?Atom(BName)], noresult},
   when AttrName == behavior orelse AttrName == behaviour ->
     R = {attribute, Line, AttrName, BName},
     {R, State};
+% top level function with cases of different arities, one function per arity
+ast_to_ast(?E(Line, fn, {Name, Attrs, ?E(CLine, 'case', Cases)}),
+           #{level := 0}=State) when is_list(Cases), length(Cases) > 1 ->
+    case split_by_arity(Cases) of
+        [_] ->
+            top_level_fn_defaults(Line, Name, Attrs, CLine, Cases, State);
+        Groups ->
+            Fns = [?E(Line, fn, {Name, Attrs, ?E(CLine, 'case', Group)}) || Group <- Groups],
+            ast_to_ast(Fns, State)
+    end;
 % top level function with default arguments, the shorter arities call the
 % longer one
 ast_to_ast(?E(Line, fn, {Name, Attrs, ?E(CLine, 'case', Cases)}),
            #{level := 0}=State) ->
-    case expand_defaults(Line, Name, Attrs, Cases) of
-        nodefaults ->
-            top_level_fn(Line, Name, Attrs, Cases, State);
-        {ok, MainCases, Extras} ->
-            Main = ?E(Line, fn, {Name, Attrs, ?E(CLine, 'case', MainCases)}),
-            {Holders, State1} = ast_to_ast([Main|Extras], State),
-            {Holders, State1};
-        {error, ErrLine, Bad} ->
-            State1 = add_error(State, invalid_default_argument, ErrLine,
-                               expected_got("default arguments after the required ones",
-                                            {ast, Bad})),
-            top_level_fn(Line, Name, Attrs, strip_defaults(Cases), State1)
-    end;
+    top_level_fn_defaults(Line, Name, Attrs, CLine, Cases, State);
 % record declaration
 ast_to_ast({attr, Line, [?Atom(record)], [?Atom(RecordName)], ?S(_TLine, tuple, Fields)},
            #{level := 0}=State) ->
@@ -470,6 +468,36 @@ ast_to_ast([H|T], Accum, State) ->
                   true -> [EH|Accum]
                end,
     ast_to_ast(T, NewAccum, State1).
+
+top_level_fn_defaults(Line, Name, Attrs, CLine, Cases, State) ->
+    case expand_defaults(Line, Name, Attrs, Cases) of
+        nodefaults ->
+            top_level_fn(Line, Name, Attrs, Cases, State);
+        {ok, MainCases, Extras} ->
+            Main = ?E(Line, fn, {Name, Attrs, ?E(CLine, 'case', MainCases)}),
+            ast_to_ast([Main|Extras], State);
+        {error, ErrLine, Bad} ->
+            State1 = add_error(State, invalid_default_argument, ErrLine,
+                               expected_got("default arguments after the required ones",
+                                            {ast, Bad})),
+            top_level_fn(Line, Name, Attrs, strip_defaults(Cases), State1)
+    end.
+
+% group the cases by arity keeping the order, an else case stays with the
+% group before it
+split_by_arity(Cases) ->
+    {Groups, Order} = lists:foldl(
+        fun (Case, {Acc, Ord}) ->
+                Arity = case_arity(Case, Ord),
+                case maps:is_key(Arity, Acc) of
+                    true -> {Acc#{Arity := maps:get(Arity, Acc) ++ [Case]}, Ord};
+                    false -> {Acc#{Arity => [Case]}, Ord ++ [Arity]}
+                end
+        end, {#{}, []}, Cases),
+    [maps:get(A, Groups) || A <- Order].
+
+case_arity({cmatch, _, {Conds, _, _}}, _Order) -> length(Conds);
+case_arity({celse, _, _}, Order) -> lists:last(Order).
 
 top_level_fn(Line, Name, Attrs, Cases, #{level := 0, fns := Fns, fns_by_name := FnsByName,
                                          module := Module, path := Path}=State) ->

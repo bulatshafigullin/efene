@@ -86,3 +86,10 @@ fn get_key(M, K) = M[K]
 fn get_default(M) = M['name', nil]
 fn mixed(M) = M['user'].name
 fn has_id case P when P.id > 1: big else: small end
+
+fn arities
+  case: zero
+  case A, 0: (two_zero, A)
+  case A: (one, A)
+  case A, B: (two, A, B)
+end

@@ -1,0 +1,1 @@
+fn f case X: 'a #{X +} b' end

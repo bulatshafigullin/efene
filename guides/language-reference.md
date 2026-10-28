@@ -1022,6 +1022,13 @@ Parameters written `Name := Default` are optional, the shorter arities are gener
 
 defines `greet/1` and `greet/2`. Only trailing parameters can have defaults.
 
+A `fn` can also have cases of different arities, each arity becomes its own function, cases of the same arity keep their order:
+
+    fn area
+      case R: 3 * R * R
+      case W, H: W * H
+    end
+
 ### Constants and Guard Functions
 
 `@const(NAME) -> expr` defines a constant, `#m NAME` expands to the expression where it is used, also in patterns and guards:

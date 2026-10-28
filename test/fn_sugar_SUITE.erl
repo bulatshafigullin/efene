@@ -3,7 +3,7 @@
 
 all() -> [comments, consts, guard_fns, fn_shorthand, default_arguments,
           interpolation, ok_err, with, with_else, try_bang, piped_match,
-          map_access, formatter_keeps_meaning].
+          map_access, multiple_arities, error_paths, formatter_keeps_meaning].
 
 init_per_suite(Config) ->
     OutDir = filename:join(proplists:get_value(priv_dir, Config), "sugar"),
@@ -75,6 +75,25 @@ map_access(_Config) ->
     {'EXIT', {{badkey, id}, _}} = (catch sugar:get_id(#{})),
     big = sugar:has_id(#{id => 2}),
     small = sugar:has_id(#{id => 1}).
+
+multiple_arities(_Config) ->
+    zero = sugar:arities(),
+    {one, 1} = sugar:arities(1),
+    {two, 1, 2} = sugar:arities(1, 2),
+    {two_zero, 1} = sugar:arities(1, 0).
+
+error_paths(Config) ->
+    Dir = filename:join(proplists:get_value(data_dir, Config), "bad"),
+    lists:foreach(
+      fun (File) ->
+              Path = filename:join(Dir, File),
+              case catch efene:to_mod(Path) of
+                  {error, _} -> ok;
+                  {error, _, _} -> ok;
+                  Other -> ct:fail({File, expected_error, Other})
+              end
+      end, ["default_not_trailing.fn", "unterminated_interp.fn", "bad_interp_expr.fn",
+            "bad_access.fn", "bad_access_args.fn", "undefined_const.fn"]).
 
 formatter_keeps_meaning(Config) ->
     Out = efene:to_efene(proplists:get_value(src, Config)),
