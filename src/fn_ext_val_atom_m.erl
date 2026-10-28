@@ -5,6 +5,10 @@
 
 -include("efene.hrl").
 
+% #m <var> defined with @const(<var>) -> expr
+handle(_Path, ?Var(_Line, MacroName), #{consts := Consts}=State)
+  when is_map_key(MacroName, Consts) ->
+    fn_to_erl:ast_to_ast(maps:get(MacroName, Consts), State);
 % #m <var>
 handle(_Path, ?Var(Line, MacroName), State) ->
     expand_macro(Line, State, MacroName, []);

@@ -1,0 +1,64 @@
+fn all
+  @doc("condition that matches when all the conditions match (AND), each
+  condition is a map of lookups like {age__gte: 18} or another condition")
+  case Conds: (all, (for C in Conds: normalize(C) end))
+end
+
+fn any
+  @doc("condition that matches when any of the conditions match (OR)")
+  case Conds: (any, (for C in Conds: normalize(C) end))
+end
+
+fn neg
+  @doc("condition that matches when the condition doesn't match (NOT)")
+  case Cond: (negate, normalize(Cond))
+end
+
+fn exists
+  @doc("condition that matches when Query returns rows, use ref/1 in Query to
+  refer to the row of the outer query: exists(orm.query.filter(models.post.objects(),
+  {author_id: orm.q.ref(id)}))")
+  case Query: (exists, Query)
+end
+
+fn ref
+  @doc("as a lookup value inside a subquery, the column Key of the outer query
+  (like django's OuterRef)")
+  case Key: (ref, Key)
+end
+
+fn f
+  @doc("as a lookup value, the column Key of the same row (like django's F):
+  {updated_at__gt: orm.q.f(created_at)}")
+  case Key: (f, Key)
+end
+
+fn lookup
+  @doc("condition for a lookup built at runtime, for keys that come from user
+  input without making atoms: lookup(\"age\", \"gte\", 18),
+  lookup([\"author\", \"name\"], \"istartswith\", \"a\"), the names are checked
+  against the model when the query is compiled")
+  case Path, Op, Value:
+    Parts = path_parts(Path) ++ [orm.schema.to_binary(Op)]
+    (lookup, iolist_to_binary(lists.join('__', Parts)), Value)
+end
+
+fn path_parts @private
+  case Path when is_atom(Path) or is_binary(Path): [orm.schema.to_binary(Path)]
+  case Path:
+    match io_lib.printable_unicode_list(Path):
+      case true: [orm.schema.to_binary(Path)]
+      case false: for P in Path: orm.schema.to_binary(P) end
+    end
+end
+
+fn normalize
+  @doc("normalize a condition, a map of lookups is an AND of its lookups")
+  case Map when is_map(Map):
+    (all, (for (Key, Value) in lists.sort(maps.to_list(Map)): (lookup, Key, Value) end))
+  case (all, Nodes): (all, Nodes)
+  case (any, Nodes): (any, Nodes)
+  case (negate, Node): (negate, Node)
+  case (lookup, Key, Value): (lookup, Key, Value)
+  case (exists, Query): (exists, Query)
+end

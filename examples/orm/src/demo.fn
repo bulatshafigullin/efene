@@ -1,0 +1,410 @@
+@import(orm.query, [from/1, filter/2, exclude/2, join/2, join/3, left_join/2, left_join/3,
+                    join_as/4, left_join_as/4, cte/2, join_cte/3, left_join_cte/3,
+                    order_by/2, limit/2, offset/2, distinct/1, values/2,
+                    select_related/2, to_sql/1])
+@import(orm.q, [all/1, any/1, neg/1, exists/1, ref/1, f/1, lookup/3])
+
+fn main
+  case:
+    (ok, Conn) = orm.repo.connect({hostname: "localhost", database: database()})
+    setup(Conn)
+    seed(Conn)
+    step_by_step(Conn)
+    chained(Conn)
+    conditions(Conn)
+    relations(Conn)
+    search_examples(Conn)
+    dynamic(Conn)
+    subqueries(Conn)
+    filtered_joins(Conn)
+    ctes(Conn)
+    single_values(Conn)
+    changes(Conn)
+    errors(Conn)
+    ok
+end
+
+fn database
+  case:
+    match os.getenv("ORM_DATABASE"):
+      case false: "efene_orm_example"
+      case Name: Name
+    end
+end
+
+fn setup
+  case Conn:
+    orm.repo.execute(Conn, "DROP TABLE IF EXISTS comments, posts, users")
+    orm.repo.execute(Conn, "CREATE TABLE users (id serial PRIMARY KEY, name text NOT NULL,
+      email text, age integer, active boolean NOT NULL DEFAULT true)")
+    orm.repo.execute(Conn, "CREATE TABLE posts (id serial PRIMARY KEY, title text NOT NULL,
+      body text NOT NULL DEFAULT '', published boolean NOT NULL DEFAULT false,
+      author_id integer NOT NULL REFERENCES users(id))")
+    orm.repo.execute(Conn, "CREATE TABLE comments (id serial PRIMARY KEY, body text NOT NULL,
+      post_id integer NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+      author_id integer NOT NULL REFERENCES users(id))")
+end
+
+fn seed
+  case Conn:
+    Ann = models.user.create(Conn, {name: 'Ann', email: 'ann@example.com', age: 34})
+    Bob = models.user.create(Conn, {name: 'Bob', email: 'bob@example.com', age: 17})
+    Carla = models.user.create(Conn, {name: 'Carla', email: 'carla@spam.com', age: 52})
+    Dan = models.user.create(Conn, {name: 'Dan', email: nil, age: 25, active: false})
+    Eve = models.user.create(Conn, {name: 'Eve', email: 'eve@example.com', age: 41})
+
+    Efene = models.post.create(Conn, {title: 'Efene for Erlangers', body: 'An intro to efene',
+                                      published: true, author_id: id(Ann)})
+    models.post.create(Conn, {title: 'Draft: macros', body: 'TODO', author_id: id(Ann)})
+    Cheap = models.post.create(Conn, {title: 'Buy cheap stuff', body: 'click here 100%',
+                                      published: true, author_id: id(Carla)})
+    Tips = models.post.create(Conn, {title: 'Postgres tips', body: 'Use indexes',
+                                     published: true, author_id: id(Eve)})
+
+    models.comment.create(Conn, {body: 'Great intro', post_id: id(Efene), author_id: id(Bob)})
+    models.comment.create(Conn, {body: 'Nice, efene looks fun', post_id: id(Efene), author_id: id(Eve)})
+    models.comment.create(Conn, {body: 'Thanks!', post_id: id(Tips), author_id: id(Ann)})
+    models.comment.create(Conn, {body: 'spam spam spam', post_id: id(Cheap), author_id: id(Dan)})
+    ok
+end
+
+fn id case Row: maps.get(id, Row) end
+
+fn show
+  @doc("print the SQL of Query and the rows it returns")
+  case Conn, Title, Query:
+    (Sql, Params) = to_sql(Query)
+    ParamsText = lists.join(", ", (for P in Params: io_lib.format("~p", [P]) end))
+    io.format("~n== ~s~n~s~n[~s]~n", [Title, Sql, ParamsText])
+    lists.foreach(fn case Row: io.format("  ~p~n", [Row]) end, orm.repo.all(Conn, Query))
+end
+
+fn step_by_step
+  case Conn:
+    Q1 = models.user.objects()
+    Q2 = filter(Q1, {age__gte: 18})
+    Q3 = exclude(Q2, {email__endswith: '@spam.com'})
+    Q4 = order_by(Q3, ["-age"])
+    show(Conn, "adults without spam emails, oldest first", Q4)
+    show(Conn, "the same query without the exclude step", order_by(Q2, ["-age"]))
+end
+
+fn chained
+  case Conn:
+    Published = models.post.objects() ->
+      filter({published: true}) ->
+      filter({author__age__gt: 30}) ->
+      select_related([author]) ->
+      order_by([title])
+    show(Conn, "published posts by authors over 30 with their author", Published)
+end
+
+fn conditions
+  case Conn:
+    show(Conn, "minors or users without email (OR)",
+         (models.user.objects() ->
+           filter(#q ({age__lt: 18} | {email__isnull: true})) ->
+           values([name, age, email])))
+
+    show(Conn, "age between 20 and 40 and name in a list",
+         (models.user.objects() ->
+           filter({age__range: (20, 40), name__in: ['Ann', 'Dan', 'Eve']}) ->
+           values([name, age])))
+
+    show(Conn, "not (inactive or named Bob)",
+         (models.user.objects() ->
+           filter(#q (~({active: false} | {name: 'Bob'}))) ->
+           values([name])))
+end
+
+fn relations
+  case Conn:
+    show(Conn, "users that commented on posts about efene (reverse relations)",
+         (models.user.objects() ->
+           filter({comments__post__title__icontains: 'efene'}) ->
+           distinct() ->
+           values([name])))
+
+    show(Conn, "comments with their author, post and post author (values across joins)",
+         (models.comment.objects() ->
+           values([body, author__name, post__title, post__author__name]) ->
+           order_by([id])))
+
+    show(Conn, "users with posts (explicit inner join)",
+         (models.user.objects() ->
+           join(posts) ->
+           distinct() ->
+           values([name]) ->
+           order_by([name])))
+
+    show(Conn, "users without posts",
+         (models.user.objects() ->
+           filter({posts__isnull: true}) ->
+           values([name])))
+end
+
+fn search
+  @doc("build a query step by step from optional search params")
+  case Params: lists.foldl(fn search_step:2, models.post.objects(), lists.sort(maps.to_list(Params)))
+end
+
+fn search_step
+  case (text, Text), Q:
+    filter(Q, #q ({title__icontains: Text} | {body__icontains: Text}))
+  case (author, Name), Q: filter(Q, {author__name__iexact: Name})
+  case (published, Published), Q: filter(Q, {published: Published})
+  case (order, Order), Q: order_by(Q, [Order])
+  case (page, N), Q: offset(limit(Q, 2), (N - 1) * 2)
+end
+
+fn search_examples
+  case Conn:
+    show(Conn, "search by text", (search({text: "efene"}) -> values([title])))
+    show(Conn, "search by author and published",
+         (search({author: "ann", published: false}) -> values([title])))
+    show(Conn, "search page 2 ordered by title",
+         (search({order: title, page: 2}) -> values([title])))
+end
+
+fn users_matching
+  @doc("users matching Rules, a list of (Field, Op, Value) strings like a filter
+  builder UI sends, Mode is \"all\" (AND) or \"any\" (OR)")
+  case Rules, Mode:
+    Conds = for (Field, Op, Value) in Rules: lookup(Field, Op, Value) end
+    Cond = match Mode:
+      case "any": any(Conds)
+      case _: all(Conds)
+    end
+    filter(models.user.objects(), Cond)
+end
+
+fn user_param
+  @doc("apply one query string param to the query, unknown params are ignored")
+  case ("name", Name), Q: filter(Q, {name__icontains: Name})
+  case ("min_age", Age), Q: filter(Q, {age__gte: list_to_integer(Age)})
+  case ("max_age", Age), Q: filter(Q, {age__lte: list_to_integer(Age)})
+  case ("active", "yes"), Q: filter(Q, {active: true})
+  case ("active", "no"), Q: filter(Q, {active: false})
+  case ("order", Field), Q: order_by(Q, [Field])
+  case ("page", Page), Q:
+    N = list_to_integer(Page)
+    offset(limit(Q, 2), (N - 1) * 2)
+  case _Unknown, Q: Q
+end
+
+fn from_query_string
+  @doc("build the query from parsed query string params, like (\"name\", \"a\")")
+  case Params: lists.foldl(fn user_param:2, models.user.objects(), Params)
+end
+
+fn scope
+  @doc("named query fragments that can be picked at runtime")
+  case "active", Q: filter(Q, {active: true})
+  case "adults", Q: filter(Q, {age__gte: 18})
+  case "authors", Q: distinct(join(Q, posts))
+end
+
+fn dynamic
+  case Conn:
+    Rules = [("age", "gte", 18), ("posts__title", "icontains", "efene")]
+    show(Conn, "filter builder rules (AND)",
+         (users_matching(Rules, "all") -> distinct() -> values(["name", "age"])))
+
+    AnyRules = [("age", "lt", 18), ("email", "isnull", true), (["posts", "title"], "icontains", "tips")]
+    show(Conn, "filter builder rules (OR)",
+         (users_matching(AnyRules, "any") -> distinct() -> values(["name"])))
+
+    QueryString = [("min_age", "20"), ("name", "a"), ("utm_source", "x"), ("order", "-age")]
+    show(Conn, "query string ?min_age=20&name=a&utm_source=x&order=-age",
+         (from_query_string(QueryString) -> values([name, age])))
+
+    show(Conn, "query string ?active=yes&order=name&page=2",
+         (from_query_string([("active", "yes"), ("order", "name"), ("page", "2")]) ->
+          values([name])))
+
+    Scopes = ["adults", "active", "authors"]
+    show(Conn, "scopes picked at runtime: adults, active, authors",
+         (lists.foldl(fn scope:2, models.user.objects(), Scopes) -> values([name])))
+
+    io.format("~n== bad dynamic input~n")
+    lists.foreach(fn case (Field, Op):
+                    try
+                      to_sql(users_matching([(Field, Op, 1)], "all"))
+                    catch
+                      case error, Reason: io.format("~s ~s: ~p~n", [Field, Op, Reason])
+                    end
+                  end, [("password", "exact"), ("age", "sounds_like_x1"),
+                        ("age__years", "gt"), ("friends__name", "exact")])
+    try
+      to_sql(from_query_string([("order", "-secret_column_x2")]))
+    catch
+      case error, OrderReason: io.format("order by -secret_column_x2: ~p~n", [OrderReason])
+    end
+    Created = for Name in ['sounds_like_x1', 'secret_column_x2']:
+      try
+        binary_to_existing_atom(Name)
+        (Name, atom_created)
+      catch
+        case error, badarg: (Name, no_atom_created)
+      end
+    end
+    io.format("atoms: ~p~n", [Created])
+end
+
+fn subqueries
+  case Conn:
+    Over40 = filter(models.user.objects(), {age__gt: 40})
+    show(Conn, "posts by users over 40 (IN subquery, selects the primary key)",
+         (models.post.objects() ->
+           filter({author_id__in: Over40}) ->
+           values([title])))
+
+    Commenters = values(models.comment.objects(), [author_id])
+    show(Conn, "users that commented (IN subquery with values)",
+         (models.user.objects() ->
+           filter({id__in: Commenters}) ->
+           values([name]) ->
+           order_by([name])))
+
+    AvgAge = values(models.user.objects(), [(avg, age)])
+    show(Conn, "users older than the average (scalar subquery)",
+         (models.user.objects() ->
+           filter({age__gt: AvgAge}) ->
+           values([name, age])))
+
+    PublishedByUser = filter(models.post.objects(),
+                                       {author_id: ref(id), published: true})
+    show(Conn, "users with a published post (EXISTS with a reference to the outer row)",
+         (models.user.objects() ->
+           filter(exists(PublishedByUser)) ->
+           values([name])))
+    show(Conn, "adults that are active or have a published post (operators with exists)",
+         (models.user.objects() ->
+           filter(#q ({age__gte: 18} & ({active: true} | exists(PublishedByUser)))) ->
+           values([name])))
+    show(Conn, "adults except spammers (A - B is A and not B)",
+         (models.user.objects() ->
+           filter(#q ({age__gte: 18} - {email__endswith: '@spam.com'})) ->
+           values([name])))
+    show(Conn, "users without a published post (NOT EXISTS)",
+         (models.user.objects() ->
+           exclude(exists(PublishedByUser)) ->
+           values([name])))
+
+    show(Conn, "comments not written by the author of the post (column vs column)",
+         (models.comment.objects() ->
+           exclude({author_id: f(post__author_id)}) ->
+           values([body, author__name, post__author__name])))
+end
+
+fn filtered_joins
+  case Conn:
+    show(Conn, "published posts per user, zero included (condition in the LEFT JOIN)",
+         (models.user.objects() ->
+           left_join(posts, {published: true}) ->
+           values([name, (count, posts__id, published_posts)]) ->
+           order_by(["-published_posts", name])))
+
+    show(Conn, "users with a published post and a draft (the same relation joined twice)",
+         (models.user.objects() ->
+           join_as(published, posts, {published: true}) ->
+           join_as(drafts, posts, {published: false}) ->
+           values([name, published__title, drafts__title])))
+
+    show(Conn, "posts per author name (aggregate grouped by a related field)",
+         (models.post.objects() ->
+           values([author__name, (count, id, posts)]) ->
+           order_by(["-posts", author__name])))
+end
+
+fn ctes
+  case Conn:
+    Stats = cte(author_stats,
+                          (models.post.objects() ->
+                            values([author_id,
+                                              (count_distinct, id, post_count),
+                                              (count_distinct, comments__id, comment_count)])))
+
+    show(Conn, "query a CTE like a table",
+         (from(Stats) ->
+           filter({comment_count__gte: 1}) ->
+           order_by(["-post_count", author_id])))
+
+    show(Conn, "join a CTE and filter on its columns",
+         (models.user.objects() ->
+           join_cte(Stats, {id: author_id}) ->
+           filter({author_stats__post_count__gte: 2}) ->
+           values([name, author_stats__post_count, author_stats__comment_count])))
+
+    show(Conn, "left join a CTE, users without posts get nulls",
+         (models.user.objects() ->
+           left_join_cte(Stats, {id: author_id}) ->
+           values([name, author_stats__post_count]) ->
+           order_by([name])))
+
+    Prolific = values(filter(from(Stats), {post_count__gte: 2}),
+                                [author_id])
+    show(Conn, "a CTE as a subquery",
+         (models.user.objects() ->
+           filter({id__in: Prolific}) ->
+           values([name])))
+end
+
+fn single_values
+  case Conn:
+    Users = models.user.objects()
+    io.format("~n== single values~n")
+    io.format("adults: ~p~n", [orm.repo.count(Conn, filter(Users, {age__gte: 18}))])
+    io.format("any spam email? ~p~n", [orm.repo.exists(Conn, filter(Users, {email__contains: 'spam'}))])
+    io.format("any 100% literal? ~p~n", [orm.repo.exists(Conn, filter(models.post.objects(), {body__contains: '100%'}))])
+    io.format("get by email: ~p~n", [orm.repo.get(Conn, Users, {email: 'eve@example.com'})])
+    io.format("get missing: ~p~n", [orm.repo.get(Conn, Users, {name: 'Zed'})])
+    io.format("get many: ~p~n", [orm.repo.get(Conn, Users, {age__gt: 18})])
+    io.format("youngest: ~p~n", [orm.repo.first(Conn, order_by(Users, [age]))])
+end
+
+fn changes
+  case Conn:
+    Spammers = filter(models.user.objects(), {email__endswith: '@spam.com'})
+    io.format("~n== changes~n")
+    io.format("deactivated spammers: ~p~n", [orm.repo.update(Conn, Spammers, {active: false})])
+
+    ByInactive = filter(models.post.objects(), {author__active: false, published: true})
+    io.format("unpublished posts of inactive authors: ~p~n",
+              [orm.repo.update(Conn, ByInactive, {published: false})])
+
+    SpamComments = filter(models.comment.objects(), {body__icontains: 'spam'})
+    io.format("deleted spam comments: ~p~n", [orm.repo.delete(Conn, SpamComments)])
+
+    Committed = orm.repo.transaction(Conn, fn case C:
+      Fay = models.user.create(C, {name: 'Fay', email: 'fay@example.com', age: 29})
+      models.post.create(C, {title: 'Hello from Fay', published: true, author_id: id(Fay)})
+      id(Fay)
+    end)
+    io.format("committed transaction: ~p~n", [Committed])
+
+    RolledBack = orm.repo.transaction(Conn, fn case C:
+      models.user.create(C, {name: 'Temp', age: 1})
+      orm.repo.rollback(C, changed_my_mind)
+    end)
+    io.format("rolled back transaction: ~p~n", [RolledBack])
+    io.format("users named Temp after rollback: ~p~n",
+              [orm.repo.count(Conn, filter(models.user.objects(), {name: 'Temp'}))])
+    show(Conn, "users after changes",
+         (models.user.objects() -> order_by([id]) -> values([name, active])))
+end
+
+fn errors
+  case Conn:
+    io.format("~n== errors~n")
+    try
+      orm.repo.all(Conn, filter(models.user.objects(), {nickname: 'x'}))
+    catch
+      case error, Reason: io.format("unknown field: ~p~n", [Reason])
+    end
+    try
+      orm.repo.all(Conn, join(models.user.objects(), friends))
+    catch
+      case error, Reason1: io.format("unknown relation: ~p~n", [Reason1])
+    end
+end

@@ -32,6 +32,10 @@ new_state(Module, Path) ->
       macros => dict:new(),
       fns => [],
       fns_by_name => #{},
+      consts => #{},
+      guard_fns => #{},
+      user_fns => sets:new(),
+      counter => 0,
       level => 0}.
 
 to_erl(Ast, Module, Path) ->
@@ -72,7 +76,14 @@ replace_fn_holders([{fn, Name, Arity}|T], State=#{fns_by_name:=FnsByName},
 replace_fn_holders([H|T], State, Accum, EmittedFns) ->
     replace_fn_holders(T, State, [H|Accum], EmittedFns).
 
+ast_to_ast(Nodes, #{level := 0}=State) when is_list(Nodes) ->
+    ast_to_ast(Nodes, [], prescan(Nodes, State));
 ast_to_ast(Nodes, State) when is_list(Nodes) -> ast_to_ast(Nodes, [], State);
+
+%-const(NAME) -> expr, expanded where #m NAME is used, see prescan/2
+ast_to_ast({attr, _Line, [?Atom(const)], [?Var(_)], Expr}, #{level := 0}=State)
+  when Expr =/= noresult ->
+    {'fn compiler ignore', State};
 
 %-export([...]).
 ast_to_ast({attr, Line, [?Atom(export=Name)], Params, noresult}, #{level := 0}=State) ->
@@ -131,37 +142,23 @@ ast_to_ast({attr, Line, [?Atom(AttrName)], [?Atom(BName)], noresult},
   when AttrName == behavior orelse AttrName == behaviour ->
     R = {attribute, Line, AttrName, BName},
     {R, State};
-% top level function
-ast_to_ast(?E(Line, fn, {Name, Attrs, ?E(_CLine, 'case', Cases)}),
-           #{level := 0, fns := Fns, fns_by_name := FnsByName,
-             module := Module, path := Path}=State) ->
-    [FirstCase|_TCases] = Cases,
-    {cmatch, _FCLine, {FCCond, _FCWhen, _FCBody}} = FirstCase,
-    Arity = length(FCCond),
-    {ok, FixedCases} = expand_case_else_match(Cases),
-    BareName = unwrap(Name),
-    StateLevel1 = State#{level := 1, function_name => BareName, function_arity => Arity},
-    {EFixedCases, State1} = ast_to_ast(FixedCases, StateLevel1),
-    EFn = {function, Line, BareName, Arity, EFixedCases},
-    FnRef = {Name, Arity},
-    {R, RestAttrs, State2} = case extract_spec_attr(FnRef, Attrs, [], nil, State1) of
-                                 {found, ESpecAttr, IRestAttrs, State21} ->
-                                     {[EFn, ESpecAttr], IRestAttrs, State21};
-                                 {notfound, IRestAttrs, State21} ->
-                                     {EFn, IRestAttrs, State21}
-                             end,
-    State3 = add_attributes(State2, fn, Line, {BareName, Arity}, Attrs),
-    State4 = add_attributes(State3, fn_attrs, Line, {BareName, Arity}, RestAttrs),
-    State5 = check_case_arities_equal(Cases, State4, Arity),
-    FnInfo = #{name => BareName, arity => Arity, line => Line, ast => R,
-               module => Module, module_path => Path, attrs => Attrs},
-
-    State6 = check_fn_override(FnInfo, State5),
-    State7 = State6#{level := 0,
-                     fns := [FnInfo|Fns],
-                     fns_by_name := FnsByName#{{BareName, Arity} => FnInfo}},
-    {{fn, BareName, Arity}, State7};
-
+% top level function with default arguments, the shorter arities call the
+% longer one
+ast_to_ast(?E(Line, fn, {Name, Attrs, ?E(CLine, 'case', Cases)}),
+           #{level := 0}=State) ->
+    case expand_defaults(Line, Name, Attrs, Cases) of
+        nodefaults ->
+            top_level_fn(Line, Name, Attrs, Cases, State);
+        {ok, MainCases, Extras} ->
+            Main = ?E(Line, fn, {Name, Attrs, ?E(CLine, 'case', MainCases)}),
+            {Holders, State1} = ast_to_ast([Main|Extras], State),
+            {Holders, State1};
+        {error, ErrLine, Bad} ->
+            State1 = add_error(State, invalid_default_argument, ErrLine,
+                               expected_got("default arguments after the required ones",
+                                            {ast, Bad})),
+            top_level_fn(Line, Name, Attrs, strip_defaults(Cases), State1)
+    end;
 % record declaration
 ast_to_ast({attr, Line, [?Atom(record)], [?Atom(RecordName)], ?S(_TLine, tuple, Fields)},
            #{level := 0}=State) ->
@@ -244,6 +241,13 @@ ast_to_ast(?S(Line, tuple=Type, Val), State)   ->
 % <val> :: <val>
 ast_to_ast(?S(Line, cons=Type, {H, T}), State) ->
     with_childs(State, H, T, fun (EH, ET) -> {Type, Line, EH, ET} end);
+
+% function reference to a nested module: fn foo.bar.baz:1
+ast_to_ast(?V(Line, fn_ref, {Path, Arity}), State) when length(Path) > 2 ->
+    case join_module_path(Path) of
+        {ok, ModPath} -> ast_to_ast(?V(Line, fn_ref, {ModPath, Arity}), State);
+        {error, Bad} -> invalid_module_path(Line, Bad, State)
+    end;
 
 % function reference
 ast_to_ast(?V(Line, fn_ref, {[Mod, Fun], Arity}), State) ->
@@ -369,12 +373,54 @@ ast_to_ast(?E(Line, fn, {?V(_VLine, var, FName), ?E(_CLine, 'case', Cases)}), St
     R = {named_fun, Line, FName, EFixedCases},
     {R, State1};
 
+% call to a nested module: foo.bar.baz()
+ast_to_ast(?E(Line, call, {Path, Args}), State) when length(Path) > 2 ->
+    case join_module_path(Path) of
+        {ok, ModPath} -> ast_to_ast(?E(Line, call, {ModPath, Args}), State);
+        {error, Bad} -> invalid_module_path(Line, Bad, State)
+    end;
+
 % call
 ast_to_ast(?E(Line, call, {[Mod, Fun], Args}), State) ->
     with_childs(State, Mod, Fun, Args,
                 fun (EMod, EFun, EArgs) ->
                         {call, Line, {remote, Line, EMod, EFun}, EArgs}
                 end);
+
+% ok(X) -> (ok, X) and err(X) -> (error, X), unless the module defines them
+ast_to_ast(?E(Line, call, {[?Atom(Fun)], [Arg]}), #{user_fns := UserFns}=State)
+  when Fun == ok orelse Fun == err ->
+    case sets:is_element({Fun, 1}, UserFns) of
+        true ->
+            {EArg, State1} = ast_to_ast(Arg, State),
+            {{call, Line, {atom, Line, Fun}, [EArg]}, State1};
+        false ->
+            Tag = case Fun of ok -> ok; err -> error end,
+            ast_to_ast(?S(Line, tuple, [?Atom(Line, Tag), Arg]), State)
+    end;
+
+% Map['key'] and Map.key, erlang:map_get/2 is allowed in guards
+ast_to_ast(?E(Line, access, {Map, Key, nodefault}), State) ->
+    with_childs(State, Key, Map,
+                fun (EKey, EMap) ->
+                        {call, Line, {remote, Line, {atom, Line, erlang}, {atom, Line, map_get}},
+                         [EKey, EMap]}
+                end);
+% Map['key', Default]
+ast_to_ast(?E(Line, access, {Map, Key, Default}), State) ->
+    with_childs(State, Key, Map, Default,
+                fun (EKey, EMap, EDefault) ->
+                        {call, Line, {remote, Line, {atom, Line, maps}, {atom, Line, get}},
+                         [EKey, EMap, EDefault]}
+                end);
+
+% with Pattern = Expr; ...: Body else ... end
+ast_to_ast(?E(Line, with, {Items, Body, Else}), State) ->
+    with_to_ast(Line, Items, Body, Else, State);
+
+% "text #{Expr} text"
+ast_to_ast(?E(Line, interp, {Type, Parts}), State) ->
+    interp_to_ast(Line, Type, Parts, State);
 
 % call
 ast_to_ast(?E(Line, call, {[Fun], Args}), State) ->
@@ -424,6 +470,211 @@ ast_to_ast([H|T], Accum, State) ->
                   true -> [EH|Accum]
                end,
     ast_to_ast(T, NewAccum, State1).
+
+top_level_fn(Line, Name, Attrs, Cases, #{level := 0, fns := Fns, fns_by_name := FnsByName,
+                                         module := Module, path := Path}=State) ->
+    [FirstCase|_TCases] = Cases,
+    {cmatch, _FCLine, {FCCond, _FCWhen, _FCBody}} = FirstCase,
+    Arity = length(FCCond),
+    {ok, FixedCases} = expand_case_else_match(Cases),
+    BareName = unwrap(Name),
+    StateLevel1 = State#{level := 1, function_name => BareName, function_arity => Arity},
+    {EFixedCases, State1} = ast_to_ast(FixedCases, StateLevel1),
+    EFn = {function, Line, BareName, Arity, EFixedCases},
+    FnRef = {Name, Arity},
+    {R, RestAttrs, State2} = case extract_spec_attr(FnRef, Attrs, [], nil, State1) of
+                                 {found, ESpecAttr, IRestAttrs, State21} ->
+                                     {[EFn, ESpecAttr], IRestAttrs, State21};
+                                 {notfound, IRestAttrs, State21} ->
+                                     {EFn, IRestAttrs, State21}
+                             end,
+    State3 = add_attributes(State2, fn, Line, {BareName, Arity}, Attrs),
+    State4 = add_attributes(State3, fn_attrs, Line, {BareName, Arity}, RestAttrs),
+    State5 = check_case_arities_equal(Cases, State4, Arity),
+    FnInfo = #{name => BareName, arity => Arity, line => Line, ast => R,
+               module => Module, module_path => Path, attrs => Attrs},
+
+    State6 = check_fn_override(FnInfo, State5),
+    State7 = State6#{level := 0,
+                     fns := [FnInfo|Fns],
+                     fns_by_name := FnsByName#{{BareName, Arity} => FnInfo}},
+    {{fn, BareName, Arity}, State7}.
+
+% collect what the module level declarations tell about the rest of the
+% module: @const(NAME) -> expr, functions marked @guard and the functions
+% defined by the module
+prescan(Nodes, State) ->
+    lists:foldl(fun prescan_node/2, State, Nodes).
+
+prescan_node({attr, _Line, [?Atom(const)], [?Var(Name)], Expr},
+             #{consts := Consts}=State) when Expr =/= noresult ->
+    State#{consts := Consts#{Name => Expr}};
+prescan_node(?E(_Line, fn, {Name, Attrs, ?E(_CLine, 'case', [{cmatch, _, {Params, When, Body}}|_]=Cases)}),
+             #{guard_fns := GuardFns, user_fns := UserFns}=State) ->
+    Key = {unwrap(Name), length(Params)},
+    State1 = State#{user_fns := sets:add_element(Key, UserFns)},
+    IsGuard = lists:any(fun ({attr, _, [?Atom(guard)], _, _}) -> true;
+                            (_) -> false
+                        end, Attrs),
+    case IsGuard andalso length(Cases) == 1 andalso When == nowhen
+         andalso length(Body) == 1 andalso lists:all(fun is_var/1, Params) of
+        true ->
+            [Expr] = Body,
+            ParamNames = [unwrap(P) || P <- Params],
+            State1#{guard_fns := GuardFns#{Key => {ParamNames, Expr}}};
+        false ->
+            State1
+    end;
+prescan_node(_Node, State) -> State.
+
+is_var(?V(_, var, _)) -> true;
+is_var(_) -> false.
+
+% calls to functions marked @guard are replaced by their body when they are
+% used in a guard, as guards can't call functions
+expand_guard_calls(Ast, _GuardFns, Depth) when Depth > 16 -> Ast;
+expand_guard_calls(?E(Line, call, {[?Atom(Name)], Args}), GuardFns, Depth) ->
+    Args1 = expand_guard_calls(Args, GuardFns, Depth),
+    case maps:get({Name, length(Args1)}, GuardFns, undefined) of
+        undefined ->
+            ?E(Line, call, {[?Atom(Line, Name)], Args1});
+        {ParamNames, Expr} ->
+            Bindings = maps:from_list(lists:zip(ParamNames, Args1)),
+            Body = substitute_vars(Expr, Bindings),
+            expand_guard_calls(Body, GuardFns, Depth + 1)
+    end;
+expand_guard_calls(T, GuardFns, Depth) when is_tuple(T) ->
+    list_to_tuple(expand_guard_calls(tuple_to_list(T), GuardFns, Depth));
+expand_guard_calls(L, GuardFns, Depth) when is_list(L) ->
+    [expand_guard_calls(I, GuardFns, Depth) || I <- L];
+expand_guard_calls(Other, _GuardFns, _Depth) -> Other.
+
+substitute_vars(?V(_, var, Name)=Var, Bindings) ->
+    maps:get(Name, Bindings, Var);
+substitute_vars(T, Bindings) when is_tuple(T) ->
+    list_to_tuple(substitute_vars(tuple_to_list(T), Bindings));
+substitute_vars(L, Bindings) when is_list(L) ->
+    [substitute_vars(I, Bindings) || I <- L];
+substitute_vars(Other, _Bindings) -> Other.
+
+% default arguments: fn f case A, B := 1, C := 2: ... end defines f/1 and f/2
+% calling f/3 with the defaults
+expand_defaults(Line, Name, Attrs, [{cmatch, _, {Params, _, _}}|_]=Cases) ->
+    {Required, Optional} = lists:splitwith(fun (P) -> not is_default(P) end, Params),
+    case Optional of
+        [] -> nodefaults;
+        _ ->
+            case [P || P <- Optional, not is_default(P)] of
+                [Bad|_] -> {error, element(2, Bad), Bad};
+                [] ->
+                    Names = arg_names(Required ++ [P || {default, _, P, _} <- Optional]),
+                    Defaults = [D || {default, _, _, D} <- Optional],
+                    Visibility = [A || {attr, _, [?Atom(V)], _, _}=A <- Attrs,
+                                       V == private orelse V == public],
+                    Extras = [default_arity_fn(Line, Name, Visibility, Names, Defaults,
+                                               length(Required), N)
+                              || N <- lists:seq(length(Required), length(Params) - 1)],
+                    {ok, strip_defaults(Cases), Extras}
+            end
+    end.
+
+is_default({default, _, _, _}) -> true;
+is_default(_) -> false.
+
+strip_defaults(Cases) ->
+    [case Case of
+         {cmatch, CLine, {Params, When, Body}} ->
+             {cmatch, CLine, {[case P of {default, _, Pat, _} -> Pat; _ -> P end
+                               || P <- Params], When, Body}};
+         _ -> Case
+     end || Case <- Cases].
+
+% names for the arguments of the shorter arities: the variable if the
+% parameter is one, so the defaults can use the previous arguments
+arg_names(Params) ->
+    [case P of
+         ?V(_, var, V) when V =/= '_' ->
+             case atom_to_list(V) of
+                 "_" ++ _ -> generated_arg(I);
+                 _ -> V
+             end;
+         _ -> generated_arg(I)
+     end || {I, P} <- lists:zip(lists:seq(1, length(Params)), Params)].
+
+generated_arg(I) -> list_to_atom("_Arg" ++ integer_to_list(I)).
+
+default_arity_fn(Line, Name, Visibility, Names, Defaults, NRequired, N) ->
+    Given = lists:sublist(Names, N),
+    DefaultsUsed = lists:nthtail(N - NRequired, Defaults),
+    Params = [?V(Line, var, V) || V <- Given],
+    Args = Params ++ DefaultsUsed,
+    Call = ?E(Line, call, {[Name], Args}),
+    Cases = ?E(Line, 'case', [{cmatch, Line, {Params, nowhen, [Call]}}]),
+    ?E(Line, fn, {Name, Visibility, Cases}).
+
+with_to_ast(Line, Items, Body, Else, State) ->
+    {ElseVar, Prelude, State1} = with_else(Line, Else, State),
+    Fail = fun (FLine) ->
+                   V = {var, FLine, '_WithValue'},
+                   Result = case ElseVar of
+                                none -> V;
+                                _ -> {call, FLine, {var, FLine, ElseVar}, [V]}
+                            end,
+                   {clause, FLine, [V], [], [Result]}
+           end,
+    {EBody, State2} = with_items(Items, Body, Fail, State1),
+    {{block, Line, Prelude ++ EBody}, State2}.
+
+with_else(_Line, noelse, State) ->
+    {none, [], State};
+with_else(Line, ?E(_CLine, 'case', Clauses), #{counter := Counter}=State) ->
+    {ok, FixedClauses} = expand_case_else_match(Clauses),
+    {EClauses, State1} = ast_to_ast(FixedClauses, State),
+    TupleClauses = lists:map(fun to_tuple_clause/1, EClauses),
+    Var = list_to_atom("_WithElse" ++ integer_to_list(Counter)),
+    Bind = {match, Line, {var, Line, Var}, {'fun', Line, {clauses, TupleClauses}}},
+    {Var, [Bind], State1#{counter := Counter + 1}}.
+
+with_items([], Body, _Fail, State) ->
+    ast_to_ast(Body, State);
+with_items([?O(Line, '=', Pattern, Expr)|T], Body, Fail, State) ->
+    {EExpr, State1} = ast_to_ast(Expr, State),
+    {EPattern, State2} = ast_to_ast(Pattern, State1),
+    {Inner, State3} = with_items(T, Body, Fail, State2),
+    {[{'case', Line, EExpr, [{clause, Line, [EPattern], [], Inner}, Fail(Line)]}], State3};
+with_items([Expr|T], Body, Fail, State) ->
+    {EExpr, State1} = ast_to_ast(Expr, State),
+    {Rest, State2} = with_items(T, Body, Fail, State1),
+    {[EExpr|Rest], State2}.
+
+interp_to_ast(Line, Type, Parts, State) ->
+    {Elems, State1} = state_map(fun (Part, S) -> interp_part_to_ast(Line, Part, S) end,
+                                [P || P <- Parts, P =/= {lit, ""}], State),
+    Bin = {bin, Line, Elems},
+    R = case Type of
+            bstring -> Bin;
+            string -> {call, Line, {remote, Line, {atom, Line, unicode},
+                                    {atom, Line, characters_to_list}}, [Bin]}
+        end,
+    {R, State1}.
+
+interp_part_to_ast(Line, {lit, String}, State) ->
+    {{bin_element, Line, {string, Line, String}, default, default}, State};
+interp_part_to_ast(Line, Expr, State) ->
+    {EExpr, State1} = ast_to_ast(Expr, State),
+    V = {var, Line, '_Interp'},
+    Guarded = fun (Test, Result) ->
+                      {clause, Line, [V], [[{call, Line, {atom, Line, Test}, [V]}]], [Result]}
+              end,
+    Call = fun (F, Args) -> {call, Line, {atom, Line, F}, Args} end,
+    Convert = {'fun', Line, {clauses,
+                [Guarded(is_binary, V),
+                 Guarded(is_integer, Call(integer_to_binary, [V])),
+                 Guarded(is_float, Call(float_to_binary, [V, {cons, Line, {atom, Line, short}, {nil, Line}}])),
+                 Guarded(is_atom, Call(atom_to_binary, [V, {atom, Line, utf8}])),
+                 {clause, Line, [V], [],
+                  [{call, Line, {remote, Line, {atom, Line, unicode}, {atom, Line, characters_to_binary}}, [V]}]}]}},
+    {{bin_element, Line, {call, Line, Convert, [EExpr]}, default, [binary]}, State1}.
 
 map_op('=') -> '=';
 map_op('+') -> '+';
@@ -537,9 +788,14 @@ cmatch_to_catch(Line, Class, Match, When, Body, State) ->
     {R, State4}.
 
 when_to_ast(nowhen, State) -> {[], State};
-when_to_ast(When, State) when is_list(When) ->
-    state_map(fun when_to_ast/2, When, State);
+when_to_ast(When, #{guard_fns := GuardFns}=State) when map_size(GuardFns) > 0 ->
+    when_to_ast1(expand_guard_calls(When, GuardFns, 0), State);
 when_to_ast(When, State) ->
+    when_to_ast1(When, State).
+
+when_to_ast1(When, State) when is_list(When) ->
+    state_map(fun when_to_ast1/2, When, State);
+when_to_ast1(When, State) ->
     ast_to_ast(When, State).
 
 kv_to_ast(Key, Val, State) ->
@@ -593,6 +849,24 @@ state_map(Fun, Seq, State) ->
 add_attributes(#{attrs := AttrList}=State, Type, Line, Name, Attrs) ->
     NewAttrList = [{Type, Line, Name, Attrs}|AttrList],
     State#{attrs := NewAttrList}.
+
+% [foo, bar, baz] -> ['foo.bar', baz], nested modules are named after the
+% directories they are in joined with dots, see efene:get_module_str_name/1
+join_module_path(Path) ->
+    {ModParts, [Fun]} = lists:split(length(Path) - 1, Path),
+    case [Part || Part <- ModParts, element(3, Part) =/= atom] of
+        [] ->
+            [?Atom(Line, _)|_] = ModParts,
+            Name = string:join([atom_to_list(unwrap(P)) || P <- ModParts], "."),
+            {ok, [?Atom(Line, list_to_atom(Name)), Fun]};
+        [Bad|_] ->
+            {error, Bad}
+    end.
+
+invalid_module_path(Line, Bad, State) ->
+    State1 = add_error(State, invalid_module_path, Line,
+                       expected_got("atom in module path", unwrap(Bad))),
+    {{atom, Line, error}, State1}.
 
 expected_got(Expected, Got) -> {expected, Expected, got, Got}.
 

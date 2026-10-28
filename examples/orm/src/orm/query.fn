@@ -1,0 +1,134 @@
+fn from
+  @doc("a query for all the rows of Model, refine it step by step with the other
+  functions in this module, each one returns a new query")
+  case Model:
+    {model: Model, where: [], joins: [], order: [], limit: nil, offset: nil,
+     distinct: false, select: all, related: []}
+end
+
+fn filter
+  @doc("keep the rows that match Cond, a map of lookups like
+  {age__gte: 18, author__name__startswith: 'A'} or a condition from orm.q,
+  calling it more than once ANDs the conditions")
+  case Query, Cond:
+    Where = maps.get(where, Query)
+    Query#{where: Where ++ [orm.q.normalize(Cond)]}
+end
+
+fn exclude
+  @doc("remove the rows that match Cond")
+  case Query, Cond:
+    Where = maps.get(where, Query)
+    Query#{where: Where ++ [orm.q.neg(Cond)]}
+end
+
+fn join
+  @doc("inner join a relation, Path is a relation name or a path like author__posts,
+  filters on related fields join automatically, this is needed to only keep rows
+  that have related rows")
+  case Query, Path: add_join(Query, Path, inner)
+end
+
+fn left_join
+  @doc("left join a relation, see join/2")
+  case Query, Path: add_join(Query, Path, left)
+end
+
+fn join
+  @doc("inner join a relation with extra conditions in the ON clause, Cond is
+  like in filter/2 with fields of the joined model: join(Q, posts, {published: true}),
+  filters on the same relation use this join")
+  case Query, Path, Cond: add_join(Query, (Path, inner, Cond))
+end
+
+fn left_join
+  @doc("left join a relation with extra conditions in the ON clause, rows without
+  matching related rows are kept with nulls, see join/3")
+  case Query, Path, Cond: add_join(Query, (Path, left, Cond))
+end
+
+fn join_as
+  @doc("inner join Relation (of the queried model) with Cond in the ON clause
+  under the name Name, so the same relation can be joined more than once:
+  join_as(Q, published, posts, {published: true}) then filter on published__title
+  (like django's FilteredRelation)")
+  case Query, Name, Relation, Cond: add_join(Query, (as, Name, Relation, inner, Cond))
+end
+
+fn left_join_as
+  @doc("left join version of join_as/4")
+  case Query, Name, Relation, Cond: add_join(Query, (as, Name, Relation, left, Cond))
+end
+
+fn join_cte
+  @doc("inner join the CTE Cte, On maps fields of this query to columns of the
+  CTE: join_cte(Q, Stats, {id: author_id}), its columns can be filtered, ordered
+  and selected with its name as prefix: stats__post_count__gte")
+  case Query, Cte, On: add_join(Query, (cte, Cte, inner, On))
+end
+
+fn left_join_cte
+  @doc("left join version of join_cte/3")
+  case Query, Cte, On: add_join(Query, (cte, Cte, left, On))
+end
+
+fn cte
+  @doc("a named query to use in WITH, query it with from/1, join it with
+  join_cte/3 or use it as a subquery, the WITH clause is added when it's used")
+  case Name, Query: (cte, Name, Query)
+end
+
+fn is_query
+  case Value: is_map(Value) and maps.is_key(model, Value) and maps.is_key(where, Value)
+end
+
+fn add_join @private
+  case Query, Path, Type: add_join(Query, (Path, Type))
+end
+
+fn add_join @private
+  case Query, Join:
+    Joins = maps.get(joins, Query)
+    Query#{joins: Joins ++ [Join]}
+end
+
+fn order_by
+  @doc("order by Items, each is a field (ascending), (desc, field), (asc, field)
+  or a string starting with - for descending like \"-age\", fields can be paths
+  like author__name, it replaces the previous ordering")
+  case Query, Items: Query#{order: Items}
+end
+
+fn limit
+  case Query, N when is_integer(N): Query#{limit: N}
+end
+
+fn offset
+  case Query, N when is_integer(N): Query#{offset: N}
+end
+
+fn distinct
+  case Query: Query#{distinct: true}
+end
+
+fn values
+  @doc("return maps with only Keys instead of full rows, keys can be paths to
+  related fields like author__name or aggregates (Fn, Key) and (Fn, Key, Alias)
+  with Fn count, count_distinct, sum, avg, min or max, (count, all) is COUNT(*),
+  with aggregates the other keys are grouped by: values(Q, [author__name,
+  (count, id, posts)])")
+  case Query, Keys: Query#{select: (values, Keys)}
+end
+
+fn select_related
+  @doc("include the related rows of Paths (belongs_to relations like author or
+  post__author) in each row, as a nested map, nil if there's no related row")
+  case Query, Paths:
+    Related = maps.get(related, Query)
+    Query#{related: Related ++ Paths}
+end
+
+fn to_sql
+  @doc("the SELECT statement and params for Query")
+  case Query: orm.sql.select(Query)
+end

@@ -211,6 +211,12 @@ pp({'fun', _, {function, MName, FName, Arity}}, Ctx) ->
 pp({nil, _}, _Ctx) -> text("[]");
 pp(V={cons, _, _H, _T}, Ctx) -> pp_cons(V, Ctx);
 
+% #ct <expr>, only present when formatting efene source
+pp({efene_ct, _, {call, _, _, _}=Call}, Ctx) ->
+    beside(text("#ct "), pp(Call, Ctx));
+pp({efene_ct, _, Expr}, Ctx) ->
+    beside(text("#ct ("), beside(pp(Expr, Ctx), text(")")));
+
 pp({call, _, {remote, _, MName, FName}, Args}, Ctx) ->
     pp_call(MName, FName, Args, Ctx);
 
@@ -328,10 +334,10 @@ pp({named_fun, _, AName, Clauses}, Ctx) ->
 pp({function, _, Name, Arity, Clauses}, Ctx) ->
     IsExported = function_exported(Ctx, Name, Arity),
     % HACK: force a new line above each top level function.
-    % avoid a trailing space when the function has no @public attribute
+    % functions are public by default, only mark the ones that aren't
     Header = case IsExported of
-                 true -> besidel([text("\nfn "), quote_atom(Name), text(" @public")]);
-                 false -> besidel([text("\nfn "), quote_atom(Name)])
+                 true -> besidel([text("\nfn "), quote_atom(Name)]);
+                 false -> besidel([text("\nfn "), quote_atom(Name), text(" @private")])
              end,
     % @spec/@doc/... annotations live between the `fn` header and the clauses
     Body = abovel(pp_fn_annotations(Name, Arity, Ctx)
@@ -345,10 +351,10 @@ pp({eof, _}, _Ctx) -> empty().
 pp_fn_annotations(Name, Arity, Ctx) ->
     Specs = [pp_spec_annotation(T, Ctx)
              || T <- maps:get({Name, Arity}, Ctx#ctxt.specs, [])],
-    % @public is already shown on the header, so skip it here
+    % visibility is already shown on the header, so skip it here
     Attrs = [pp_fn_attr(A, Ctx)
              || A={Path, _} <- maps:get({Name, Arity}, Ctx#ctxt.fnattrs, []),
-                Path =/= [public]],
+                Path =/= [public], Path =/= [private]],
     Specs ++ Attrs.
 
 pp_spec_annotation({type, _, bounded_fun, [FunType, _Constraints]}, Ctx) ->

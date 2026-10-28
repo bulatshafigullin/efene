@@ -1,0 +1,56 @@
+fn conn
+  @doc("the connection pool is registered with this name")
+  case: shop_db
+end
+
+fn connect
+  case:
+    orm.repo.connect({hostname: "localhost", database: database(), name: conn(), pool_size: 5})
+end
+
+fn database
+  case:
+    match os.getenv("SHOP_DATABASE"):
+      case false: "efene_shop_example"
+      case Name: Name
+    end
+end
+
+fn setup
+  case Conn:
+    orm.repo.execute(Conn, "DROP TABLE IF EXISTS products, categories")
+    orm.repo.execute(Conn, "CREATE TABLE categories (id serial PRIMARY KEY,
+      name text NOT NULL, slug text NOT NULL UNIQUE)")
+    orm.repo.execute(Conn, "CREATE TABLE products (id serial PRIMARY KEY,
+      name text NOT NULL, description text NOT NULL DEFAULT '',
+      price_cents integer NOT NULL, stock integer NOT NULL DEFAULT 0,
+      active boolean NOT NULL DEFAULT true,
+      category_id integer NOT NULL REFERENCES categories(id))")
+end
+
+fn seed
+  case Conn:
+    Laptops = models.category.create(Conn, {name: 'Laptops', slug: 'laptops'})
+    Phones = models.category.create(Conn, {name: 'Phones', slug: 'phones'})
+    Accessories = models.category.create(Conn, {name: 'Accessories', slug: 'accessories'})
+    models.category.create(Conn, {name: 'Tablets', slug: 'tablets'})
+    Products = [
+      (Laptops, 'Ultrabook 14', 'Light 14 inch laptop', 189900, 3),
+      (Laptops, 'Budget laptop 15', 'Everyday 15 inch laptop', 64900, 0),
+      (Laptops, 'Chromebook 11', 'Small laptop for school', 39900, 10),
+      (Phones, 'Phone Pro', 'Flagship phone with USB-C', 99900, 2),
+      (Phones, 'Phone Lite', 'Affordable phone', 34900, 5),
+      (Phones, 'Feature phone', 'Classic phone, long battery life', 5900, 50),
+      (Accessories, 'USB-C cable', '1m braided USB-C to USB-C cable', 1990, 100),
+      (Accessories, 'USB hub', '4 port USB 3 hub', 3450, 0),
+      (Accessories, 'Laptop sleeve', 'Fits 13 and 14 inch laptops', 2500, 7)]
+    lists.foreach(fn case (Category, Name, Description, Price, Stock):
+                    models.product.create(Conn, {name: Name, description: Description,
+                                                 price_cents: Price, stock: Stock,
+                                                 category_id: maps.get(id, Category)})
+                  end, Products)
+    models.product.create(Conn, {name: 'Old phone', description: 'Discontinued',
+                                 price_cents: 1000, active: false,
+                                 category_id: maps.get(id, Phones)})
+    ok
+end

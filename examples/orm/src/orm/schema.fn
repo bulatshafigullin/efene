@@ -1,0 +1,91 @@
+fn table
+  @doc("table name of Model, a model module or a CTE from orm.query.cte/2")
+  case (cte, Name, _Query): Name
+  case Model: maps.get(table, Model.schema())
+end
+
+fn fields
+  @doc("column names of Model, for a CTE the columns its query returns")
+  case (cte, _Name, Query): output_names(Query)
+  case Model: maps.get(fields, Model.schema())
+end
+
+fn primary_key
+  @doc("primary key column of Model, id if not specified, the first column of a CTE")
+  case (cte, Name, Query): hd(fields((cte, Name, Query)))
+  case Model: maps.get(primary_key, Model.schema(), id)
+end
+
+fn relations
+  @doc("map of relation name to relation of Model, CTEs have no relations")
+  case (cte, _Name, _Query): {}
+  case Model: maps.get(relations, Model.schema(), {})
+end
+
+fn has_field
+  case Model, Name: lists.member(Name, fields(Model))
+end
+
+fn relation
+  @doc("relation Name of Model: (belongs_to, Target, Fk), (has_many, Target, Fk),
+  (has_one, Target, Fk) or nil")
+  case Model, Name: maps.get(Name, relations(Model), nil)
+end
+
+fn name_of
+  @doc("find Name (an atom, binary or string, maybe from user input) in Model:
+  (field, Name), (relation, Name) or nil, it never creates atoms")
+  case Model, Name:
+    Bin = to_binary(Name)
+    match find_named(Bin, fields(Model)):
+      case nil:
+        match find_named(Bin, maps.keys(relations(Model))):
+          case nil: nil
+          case Relation: (relation, Relation)
+        end
+      case Field: (field, Field)
+    end
+end
+
+fn field
+  @doc("the field Name of Model as it's declared, raises (orm_unknown_field, Model, Name)")
+  case Model, Name:
+    match name_of(Model, Name):
+      case (field, Field): Field
+      case _: erlang.error((orm_unknown_field, Model, to_binary(Name)))
+    end
+end
+
+fn output_names
+  @doc("names of the columns Query returns")
+  case Query:
+    match maps.get(select, Query):
+      case all: fields(maps.get(model, Query))
+      case (values, Keys): for Key in Keys: output_name(Key) end
+    end
+end
+
+fn output_name
+  @doc("column name for a values key: the key itself, key__fn for an aggregate
+  (Fn, Key) or Alias for (Fn, Key, Alias)")
+  case (_Fn, _Key, Alias): Alias
+  case (Fn, all): iolist_to_binary(['all__', atom_to_binary(Fn)])
+  case (Fn, Key): iolist_to_binary([to_binary(Key), '__', atom_to_binary(Fn)])
+  case Key when is_list(Key): to_binary(Key)
+  case Key: Key
+end
+
+fn find_named
+  @doc("the name in Names (atoms or binaries) whose text is Bin or nil")
+  case Bin, Names:
+    match (for N in Names; when to_binary(N) == Bin: N end):
+      case [Name]: Name
+      case []: nil
+    end
+end
+
+fn to_binary
+  case Name when is_atom(Name): atom_to_binary(Name)
+  case Name when is_list(Name): unicode.characters_to_binary(Name)
+  case Name when is_binary(Name): Name
+end

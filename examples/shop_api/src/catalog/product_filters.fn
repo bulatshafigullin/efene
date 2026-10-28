@@ -1,0 +1,28 @@
+@import(orm.query, [filter/2])
+
+fn filterset
+  @doc("the filters clients can use on GET /products, nothing else is accepted:
+  each query param is matched against these names, its value is parsed with the
+  type and then applied with the lookup or function, see orm.filterset.apply/3")
+  case:
+    {filters: {q: (fn search:2, text),
+               name: (name__icontains, text),
+               category: (category__slug__in, (list, text)),
+               min_price: (price_cents__gte, money),
+               max_price: (price_cents__lte, money),
+               in_stock: (fn in_stock:2, bool)},
+     ordering: {name: name, price: price_cents, stock: stock, category: category__name},
+     default_ordering: [name],
+     default_page_size: 5,
+     max_page_size: 50}
+end
+
+fn search
+  @doc("?q=usb looks in the name and the description")
+  case Query, Text: filter(Query, #q ({name__icontains: Text} | {description__icontains: Text}))
+end
+
+fn in_stock
+  case Query, true: filter(Query, {stock__gt: 0})
+  case Query, false: filter(Query, {stock: 0})
+end

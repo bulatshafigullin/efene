@@ -1,0 +1,10 @@
+fn schema
+  case:
+    {table: 'categories',
+     fields: [id, name, slug],
+     relations: {products: (has_many, models.product, category_id)}}
+end
+
+fn objects case: orm.query.from(#i module) end
+
+fn create case Conn, Values: orm.repo.insert(Conn, #i module, Values) end

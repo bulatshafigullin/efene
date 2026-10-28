@@ -1,0 +1,656 @@
+fn select
+  @doc("SELECT statement for Query as (Sql, Params)")
+  case Query:
+    (Sql, St) = select_iodata(Query, new_state(maps.get(model, Query)))
+    (iolist_to_binary(Sql), params(St))
+end
+
+fn count
+  @doc("SELECT COUNT(*) of the rows Query returns as (Sql, Params)")
+  case Query:
+    (Sql, St) = select_iodata(Query, new_state(maps.get(model, Query)))
+    (iolist_to_binary(['SELECT COUNT(*) FROM (', Sql, ') AS "sub"']), params(St))
+end
+
+fn update
+  @doc("UPDATE the rows Query returns setting Changes (a map of field to value),
+  values can be orm.q.f(Field) to use another column")
+  case Query, Changes:
+    Model = maps.get(model, Query)
+    (Inner, St) = pk_select(Query)
+    (Sets, St1) = lists.mapfoldl(fn case (Field, Value), S:
+                                   (V, S1) = update_value(Value, S)
+                                   ([quote(Field), ' = ', V], S1)
+                                 end, St, field_values(Model, Changes))
+    Sql = ['UPDATE ', quote(orm.schema.table(Model)), ' SET ', lists.join(', ', Sets),
+           ' WHERE ', quote(orm.schema.primary_key(Model)), ' IN (', Inner, ')']
+    (iolist_to_binary(Sql), params(St1))
+end
+
+fn delete
+  @doc("DELETE the rows Query returns")
+  case Query:
+    Model = maps.get(model, Query)
+    (Inner, St) = pk_select(Query)
+    Sql = ['DELETE FROM ', quote(orm.schema.table(Model)),
+           ' WHERE ', quote(orm.schema.primary_key(Model)), ' IN (', Inner, ')']
+    (iolist_to_binary(Sql), params(St))
+end
+
+fn insert
+  @doc("INSERT a row of Model with Values (a map of field to value) returning it")
+  case Model, Values:
+    FieldValues = field_values(Model, Values)
+    Fields = for (F, _) in FieldValues: F end
+    (Params, St) = lists.mapfoldl(fn case (_, V), S: param(V, S) end,
+                                  new_state(Model), FieldValues)
+    Returning = for F in orm.schema.fields(Model): quote(F) end
+    Sql = ['INSERT INTO ', quote(orm.schema.table(Model)),
+           ' (', lists.join(', ', (for F in Fields: quote(F) end)), ')',
+           ' VALUES (', lists.join(', ', Params), ')',
+           ' RETURNING ', lists.join(', ', Returning)]
+    (iolist_to_binary(Sql), params(St))
+end
+
+fn field_values @private
+  @doc("a map of field to value as a sorted list with the fields as declared,
+  keys can be atoms, binaries or strings")
+  case Model, Values:
+    lists.sort((for (K, V) in maps.to_list(Values): (orm.schema.field(Model, K), V) end))
+end
+
+fn update_value @private
+  @doc("in UPDATE ... SET the columns are not qualified with an alias")
+  case (f, Key), St:
+    Model = maps.get(model, St)
+    (quote(orm.schema.field(Model, Key)), St)
+  case Value, St: param(Value, St)
+end
+
+fn pk_select @private
+  @doc("SELECT of the primary keys of the rows Query returns, used as a subquery
+  by update and delete so they work with joins, ordering and limits")
+  case Query:
+    Model = maps.get(model, Query)
+    PkQuery = Query#{select: (values, [orm.schema.primary_key(Model)]), related: []}
+    select_iodata(PkQuery, new_state(Model))
+end
+
+fn select_iodata @private
+  case Query, St0:
+    Model = maps.get(model, Query)
+    Joins = maps.get(joins, Query)
+    St1 = lists.foldl(fn register_join:2, ensure_cte_model(Model, St0), Joins)
+    St2 = lists.foldl(fn case Join, S: apply_join(Join, Model, S) end, St1, Joins)
+    (Cols, St3) = select_columns(Query, St2)
+    (Where, St4) = where_sql(maps.get(where, Query), St3)
+    (Order, St5) = order_sql(maps.get(order, Query), St4)
+    (Base, _) = alias_of([], St5)
+    Sql = [with_sql(St5), 'SELECT ', distinct_sql(Query), lists.join(', ', Cols),
+           ' FROM ', quote(orm.schema.table(Model)), ' AS ', quote(Base), maps.get(joins, St5),
+           Where, group_by_sql(St5), Order, limit_sql(Query)]
+    (Sql, St5)
+end
+
+fn new_state @private
+  case Model: state(Model, 't', [], 0)
+end
+
+fn state @private
+  @doc("compilation state of one SELECT, params and subs are shared with the
+  nested SELECTs (subqueries and CTEs) so the placeholders and aliases are unique")
+  case Model, Prefix, Params, Subs:
+    {model: Model, prefix: Prefix, params: Params, subs: Subs,
+     aliases: maps.put([], (alias_name(Prefix, 0), Model), {}), joins: [], next: 1,
+     negated: false, outer: false, base: [], parent: nil, no_joins: false,
+     ctes: [], cte_names: [], virtual: {}, join_conds: {}, group_by: [], outputs: []}
+end
+
+fn alias_name @private
+  case Prefix, N: iolist_to_binary([Prefix, integer_to_binary(N)])
+end
+
+fn nested_select @private
+  @doc("compile Query as a SELECT nested in the one of St, a correlated one can
+  use orm.q.ref/1 to refer to the columns of St")
+  case Query, St, Correlated:
+    Subs = maps.get(subs, St) + 1
+    Prefix = iolist_to_binary(['s', integer_to_binary(Subs), '_'])
+    Child0 = state(maps.get(model, Query), Prefix, maps.get(params, St), Subs)
+    Child1 = match Correlated:
+      case true: Child0#{parent: St}
+      case false: Child0
+    end
+    (Sql, Child2) = select_iodata(Query, Child1)
+    Parent = match maps.get(parent, Child2):
+      case nil: St
+      case P: P
+    end
+    (Sql, Parent#{params: maps.get(params, Child2), subs: maps.get(subs, Child2)})
+end
+
+fn single_column_select @private
+  @doc("a subquery used as a value returns one column, the primary key unless
+  it selects values")
+  case Query, St:
+    Model = maps.get(model, Query)
+    Query1 = match maps.get(select, Query):
+      case all: Query#{select: (values, [orm.schema.primary_key(Model)]), related: []}
+      case _: Query
+    end
+    (Sql, St1) = nested_select(Query1, St, true)
+    (['(', Sql, ')'], St1)
+end
+
+fn ensure_cte_model @private
+  case (cte, Name, Query), St: ensure_cte((cte, Name, Query), St)
+  case _Model, St: St
+end
+
+fn ensure_cte @private
+  @doc("add the CTE to the WITH clause of this SELECT if it's not there yet")
+  case (cte, Name, Query), St:
+    Names = maps.get(cte_names, St)
+    match lists.member(Name, Names):
+      case true: St
+      case false:
+        (Sql, St1) = nested_select(Query, St, false)
+        St1#{ctes: maps.get(ctes, St1) ++ [[quote(Name), ' AS (', Sql, ')']],
+             cte_names: Name :: Names}
+    end
+end
+
+fn with_sql @private
+  case St:
+    match maps.get(ctes, St):
+      case []: []
+      case Ctes: ['WITH ', lists.join(', ', Ctes), ' ']
+    end
+end
+
+fn register_join @private
+  @doc("remember the ON conditions of the joins and the joins with a name
+  (join_as and join_cte), before resolving any path")
+  case (_Path, _Type), St: St
+  case (Path, _Type, Cond), St:
+    Names = relation_names(maps.get(model, St), split_key(Path))
+    St#{join_conds: maps.put(Names, Cond, maps.get(join_conds, St))}
+  case (as, Name, Relation, _Type, Cond), St:
+    add_virtual(Name, (filtered, Relation, Cond), St)
+  case (cte, Cte, _Type, On), St:
+    add_virtual(orm.schema.table(Cte), (cte, Cte, On), St)
+end
+
+fn add_virtual @private
+  case Name, Spec, St:
+    St#{virtual: maps.put(orm.schema.to_binary(Name), (Name, Spec), maps.get(virtual, St))}
+end
+
+fn apply_join @private
+  case (Path, Type), Model, St: ensure_join(relation_names(Model, split_key(Path)), Type, St)
+  case (Path, Type, _Cond), Model, St: ensure_join(relation_names(Model, split_key(Path)), Type, St)
+  case (as, Name, _Relation, Type, _Cond), _Model, St: ensure_join([Name], Type, St)
+  case (cte, Cte, Type, _On), _Model, St: ensure_join([orm.schema.table(Cte)], Type, St)
+end
+
+fn params @private
+  case St: lists.reverse(maps.get(params, St))
+end
+
+fn param @private
+  @doc("add a query parameter, returns its placeholder ($1, $2...)")
+  case Value, St:
+    Params = maps.get(params, St)
+    N = length(Params) + 1
+    (['$', integer_to_binary(N)], St#{params: encode(Value) :: Params})
+end
+
+fn encode @private
+  @doc("efene strings are lists, the driver wants binaries")
+  case [] : []
+  case Value when is_list(Value):
+    match io_lib.printable_unicode_list(Value):
+      case true: unicode.characters_to_binary(Value)
+      case false: for V in Value: encode(V) end
+    end
+  case Value: Value
+end
+
+fn quote @private
+  case Name when is_atom(Name): ['"', atom_to_binary(Name), '"']
+  case Name: ['"', Name, '"']
+end
+
+fn column @private
+  case Alias, Field: [quote(Alias), '.', quote(Field)]
+end
+
+fn split_key @private
+  @doc("author__name__startswith -> [<<author>>, <<name>>, <<startswith>>], the
+  parts stay binaries, they are matched against the schema, keys may come from
+  user input and atoms are never garbage collected")
+  case Key: binary.split(orm.schema.to_binary(Key), '__', [global])
+end
+
+fn lookup_named @private
+  case Bin: orm.schema.find_named(Bin, lookups())
+end
+
+fn relation_names @private
+  @doc("validate a path of relation names starting at Model, returns them as atoms")
+  case _Model, []: []
+  case Model, Seg :: Rest:
+    match orm.schema.name_of(Model, Seg):
+      case (relation, Name):
+        (_Kind, Target, _Fk) = orm.schema.relation(Model, Name)
+        Name :: relation_names(Target, Rest)
+      case _: erlang.error((orm_unknown_relation, Model, orm.schema.to_binary(Seg)))
+    end
+end
+
+fn lookups @private
+  case: [exact, iexact, ne, contains, icontains, startswith, istartswith,
+         endswith, iendswith, gt, gte, lt, lte, `in`, isnull, range]
+end
+
+fn alias_of @private
+  case Path, St: maps.get(Path, maps.get(aliases, St))
+end
+
+fn ensure_join @private
+  @doc("join the relations in Path (a list of relation names) if they are not
+  joined yet, parents first")
+  case [], _Type, St: St
+  case Path, Type, St:
+    match maps.is_key(Path, maps.get(aliases, St)):
+      case true: St
+      case false:
+        Parent = lists.droplast(Path)
+        St1 = ensure_join(Parent, Type, St)
+        add_join(Path, Parent, Type, St1)
+    end
+end
+
+fn virtual_relation @private
+  @doc("the join_as/join_cte relation named Seg, they only exist at the root")
+  case [], Seg, St: maps.get(orm.schema.to_binary(Seg), maps.get(virtual, St), nil)
+  case _Path, _Seg, _St: nil
+end
+
+fn relation_spec @private
+  @doc("how to join Path: (schema, Relation, OnCond) or (cte, Cte, On)")
+  case Path, St:
+    Parent = lists.droplast(Path)
+    Name = lists.last(Path)
+    (_PAlias, PModel) = alias_of(Parent, St)
+    match virtual_relation(Parent, Name, St):
+      case (_, (filtered, Relation, Cond)):
+        match orm.schema.name_of(PModel, Relation):
+          case (relation, RelName): (schema, orm.schema.relation(PModel, RelName), Cond)
+          case _: erlang.error((orm_unknown_relation, PModel, orm.schema.to_binary(Relation)))
+        end
+      case (_, (cte, Cte, On)): (cte, Cte, On)
+      case nil:
+        match orm.schema.relation(PModel, Name):
+          case nil: erlang.error((orm_unknown_relation, PModel, Name))
+          case Relation: (schema, Relation, maps.get(Path, maps.get(join_conds, St), nil))
+        end
+    end
+end
+
+fn add_join @private
+  case Path, Parent, Type, St:
+    match maps.get(no_joins, St):
+      case true: erlang.error((orm_join_in_join_condition, Path))
+      case false: ok
+    end
+    (PAlias, PModel) = alias_of(Parent, St)
+    N = maps.get(next, St)
+    Alias = alias_name(maps.get(prefix, St), N)
+    Spec = relation_spec(Path, St)
+    (Target, St1) = match Spec:
+      case (schema, (_Kind, T, _Fk), _Cond): (T, St)
+      case (cte, Cte, _On): (Cte, ensure_cte(Cte, St))
+    end
+    St2 = St1#{aliases: maps.put(Path, (Alias, Target), maps.get(aliases, St1)), next: N + 1}
+    (On, St3) = on_sql(Spec, Alias, PAlias, PModel, Path, St2)
+    JoinSql = [join_keyword(Type), quote(orm.schema.table(Target)), ' AS ', quote(Alias),
+               ' ON ', On]
+    St3#{joins: maps.get(joins, St3) ++ [JoinSql]}
+end
+
+fn on_sql @private
+  case (schema, (belongs_to, Target, Fk), Cond), Alias, PAlias, _PModel, Path, St:
+    with_join_cond([column(Alias, orm.schema.primary_key(Target)), ' = ', column(PAlias, Fk)],
+                   Cond, Path, St)
+  case (schema, (_Many, _Target, Fk), Cond), Alias, PAlias, PModel, Path, St:
+    with_join_cond([column(Alias, Fk), ' = ', column(PAlias, orm.schema.primary_key(PModel))],
+                   Cond, Path, St)
+  case (cte, Cte, On), Alias, _PAlias, _PModel, _Path, St:
+    (Parts, St1) = lists.mapfoldl(fn case (Key, CteField), S:
+                                    Field = orm.schema.field(Cte, CteField)
+                                    (Col, S1) = resolve_path(split_key(Key), inner, S)
+                                    ([column(Alias, Field), ' = ', Col], S1)
+                                  end, St, lists.sort(maps.to_list(On)))
+    (lists.join(' AND ', Parts), St1)
+end
+
+fn with_join_cond @private
+  @doc("add the join's own conditions to ON, their keys are fields of the joined
+  model, they can't join more relations")
+  case On, nil, _Path, St: (On, St)
+  case On, Cond, Path, St:
+    Saved = maps.with([base, no_joins, negated, outer], St)
+    (Sql, St1) = cond_sql(orm.q.normalize(Cond),
+                          St#{base: Path, no_joins: true, negated: false, outer: false})
+    ([On, ' AND ', Sql], maps.merge(St1, Saved))
+end
+
+fn join_keyword @private
+  case inner: ' INNER JOIN '
+  case left: ' LEFT JOIN '
+end
+
+fn resolve_path @private
+  @doc("column for a path of relations ending in a field, joining the relations")
+  case Segments, JoinType, St: walk(Segments, maps.get(base, St), JoinType, St)
+end
+
+fn name_in @private
+  @doc("Seg as a field or relation of the model at Path, including join_as and
+  join_cte relations at the root")
+  case Model, Path, Seg, St:
+    match virtual_relation(Path, Seg, St):
+      case (Name, _Spec): (relation, Name)
+      case nil: orm.schema.name_of(Model, Seg)
+    end
+end
+
+fn walk @private
+  @doc("Segments are binaries, Path the relations walked so far")
+  case [Seg], Path, JoinType, St:
+    (Alias, Model) = alias_of(Path, St)
+    match name_in(Model, Path, Seg, St):
+      case (field, Field): (column(Alias, Field), St)
+      case (relation, Name):
+        RelPath = Path ++ [Name]
+        match relation_spec(RelPath, St):
+          case (schema, (belongs_to, _Target, Fk), nil): (column(Alias, Fk), St)
+          case _:
+            St1 = ensure_join(RelPath, JoinType, St)
+            (JAlias, JModel) = alias_of(RelPath, St1)
+            (column(JAlias, orm.schema.primary_key(JModel)), St1)
+        end
+      case nil: erlang.error((orm_unknown_field, Model, Seg))
+    end
+  case Seg :: Rest, Path, JoinType, St:
+    (_Alias, Model) = alias_of(Path, St)
+    match name_in(Model, Path, Seg, St):
+      case (relation, Name):
+        RelPath = Path ++ [Name]
+        St1 = ensure_join(RelPath, JoinType, St)
+        walk(Rest, RelPath, JoinType, St1)
+      case (field, Field):
+        match Rest:
+          case [Op]: erlang.error((orm_unknown_lookup, Model, Field, Op))
+          case _: erlang.error((orm_not_a_relation, Model, Field))
+        end
+      case nil: erlang.error((orm_unknown_relation, Model, Seg))
+    end
+end
+
+fn join_type @private
+  @doc("relations in conditions are inner joined, left joined for isnull and
+  inside OR and NOT, an inner join there would drop the rows without related
+  rows before the other conditions are checked")
+  case isnull, _St: left
+  case _Lookup, St:
+    match maps.get(outer, St):
+      case true: left
+      case false: inner
+    end
+end
+
+fn resolve_lookup @private
+  @doc("age__gte -> (column of age, gte), name -> (column of name, exact)")
+  case Key, St:
+    Parts = split_key(Key)
+    (Path, Lookup) = match (Parts, lookup_named(lists.last(Parts))):
+      case (_ :: _ :: _, L) when L != nil: (lists.droplast(Parts), L)
+      case _: (Parts, exact)
+    end
+    (Col, St1) = resolve_path(Path, join_type(Lookup, St), St)
+    (Col, Lookup, St1)
+end
+
+fn select_columns @private
+  case Query, St:
+    match maps.get(select, Query):
+      case all:
+        Model = maps.get(model, Query)
+        (Base, _) = alias_of([], St)
+        Cols = for F in orm.schema.fields(Model): [column(Base, F), ' AS ', quote(F)] end
+        (Related, St1) = lists.mapfoldl(fn related_columns:2, St, maps.get(related, Query))
+        (Cols ++ lists.append(Related), St1)
+      case (values, Keys):
+        (Items, St1) = lists.mapfoldl(fn value_column:2, St, Keys)
+        HasAggregates = lists.any(fn case (_, _, Kind): Kind == aggregate end, Items)
+        GroupBy = match HasAggregates:
+          case true: for (_, Expr, plain) in Items: Expr end
+          case false: []
+        end
+        Outputs = for Key in Keys: orm.schema.to_binary(orm.schema.output_name(Key)) end
+        ((for (Col, _, _) in Items: Col end), St1#{group_by: GroupBy, outputs: Outputs})
+    end
+end
+
+fn value_column @private
+  @doc("(ColumnSql, Expr, plain | aggregate) for a values key")
+  case (Fn, Key, Alias), St:
+    (Col, St1) = match Key:
+      case all: ('*', St)
+      case _: resolve_path(split_key(Key), left, St)
+    end
+    Expr = aggregate(Fn, Col)
+    (([Expr, ' AS ', quote(orm.schema.to_binary(Alias))], Expr, aggregate), St1)
+  case (Fn, Key), St: value_column((Fn, Key, orm.schema.output_name((Fn, Key))), St)
+  case Key, St:
+    (Col, St1) = resolve_path(split_key(Key), left, St)
+    (([Col, ' AS ', quote(orm.schema.output_name(Key))], Col, plain), St1)
+end
+
+fn aggregate @private
+  case count, Col: ['COUNT(', Col, ')']
+  case count_distinct, Col: ['COUNT(DISTINCT ', Col, ')']
+  case sum, Col: ['SUM(', Col, ')']
+  case avg, Col: ['AVG(', Col, ')']
+  case min, Col: ['MIN(', Col, ')']
+  case max, Col: ['MAX(', Col, ')']
+  case Fn, _Col: erlang.error((orm_unknown_aggregate, Fn))
+end
+
+fn group_by_sql @private
+  case St:
+    match maps.get(group_by, St):
+      case []: []
+      case Cols: [' GROUP BY ', lists.join(', ', Cols)]
+    end
+end
+
+fn related_columns @private
+  @doc("columns of a select_related path aliased as path__field")
+  case Path, St:
+    Names = relation_names(maps.get(model, St), split_key(Path))
+    St1 = ensure_join(Names, left, St)
+    (Alias, Model) = alias_of(Names, St1)
+    Prefix = lists.join('__', (for N in Names: atom_to_binary(N) end))
+    Cols = for F in orm.schema.fields(Model):
+      [column(Alias, F), ' AS ',
+       quote(iolist_to_binary([Prefix, '__', orm.schema.to_binary(F)]))]
+    end
+    (Cols, St1)
+end
+
+fn where_sql @private
+  case [], St: ([], St)
+  case Where, St:
+    (Sql, St1) = cond_sql((all, Where), St)
+    ([' WHERE ', Sql], St1)
+end
+
+fn cond_sql @private
+  case (all, []), St: ('TRUE', St)
+  case (all, Nodes), St: join_nodes(Nodes, ' AND ', St)
+  case (any, []), St: ('FALSE', St)
+  case (any, Nodes), St:
+    Outer = maps.get(outer, St)
+    (Sql, St1) = join_nodes(Nodes, ' OR ', St#{outer: true})
+    (Sql, St1#{outer: Outer})
+  case (negate, Node), St:
+    Negated = maps.get(negated, St)
+    Outer = maps.get(outer, St)
+    (Sql, St1) = cond_sql(Node, St#{negated: not Negated, outer: true})
+    (['NOT (', Sql, ')'], St1#{negated: Negated, outer: Outer})
+  case (exists, Query), St:
+    (Sql, St1) = single_column_select(Query, St)
+    (['EXISTS ', Sql], St1)
+  case (lookup, Key, Value), St:
+    (Col, Lookup, St1) = resolve_lookup(Key, St)
+    (Sql, St2) = lookup_sql(Lookup, Col, Value, St1)
+    (null_guard(Lookup, Value, Col, Sql, maps.get(negated, St2)), St2)
+end
+
+fn null_guard @private
+  @doc("in SQL NOT (col = 1) is NULL (not true) when col is NULL, so a negated
+  comparison also checks the column is not null, like django's exclude does")
+  case isnull, _Value, _Col, Sql, _Negated: Sql
+  case _Lookup, nil, _Col, Sql, _Negated: Sql
+  case _Lookup, _Value, Col, Sql, true: ['(', Sql, ' AND ', Col, ' IS NOT NULL)']
+  case _Lookup, _Value, _Col, Sql, false: Sql
+end
+
+fn join_nodes @private
+  case [Node], _Sep, St: cond_sql(Node, St)
+  case Nodes, Sep, St:
+    (Parts, St1) = lists.mapfoldl(fn cond_sql:2, St, Nodes)
+    (['(', lists.join(Sep, Parts), ')'], St1)
+end
+
+fn value_sql @private
+  @doc("SQL for a lookup value: a parameter, a column of this row (orm.q.f), a
+  column of the outer query (orm.q.ref) or a subquery")
+  case (f, Key), St: resolve_path(split_key(Key), join_type(exact, St), St)
+  case (ref, Key), St:
+    match maps.get(parent, St):
+      case nil: erlang.error((orm_ref_outside_subquery, Key))
+      case Parent:
+        (Col, Parent1) = resolve_path(split_key(Key), inner, Parent)
+        (Col, St#{parent: Parent1})
+    end
+  case Value, St:
+    match orm.query.is_query(Value):
+      case true: single_column_select(Value, St)
+      case false: param(Value, St)
+    end
+end
+
+fn lookup_sql @private
+  case exact, Col, nil, St: ([Col, ' IS NULL'], St)
+  case exact, Col, Value, St: binop(Col, ' = ', Value, St)
+  case ne, Col, nil, St: ([Col, ' IS NOT NULL'], St)
+  case ne, Col, Value, St: binop(Col, ' <> ', Value, St)
+  case iexact, Col, Value, St:
+    (V, St1) = value_sql(Value, St)
+    (['LOWER(', Col, ') = LOWER(', V, ')'], St1)
+  case gt, Col, Value, St: binop(Col, ' > ', Value, St)
+  case gte, Col, Value, St: binop(Col, ' >= ', Value, St)
+  case lt, Col, Value, St: binop(Col, ' < ', Value, St)
+  case lte, Col, Value, St: binop(Col, ' <= ', Value, St)
+  case contains, Col, Value, St: like(Col, ' LIKE ', ['%', like_escape(Value), '%'], St)
+  case icontains, Col, Value, St: like(Col, ' ILIKE ', ['%', like_escape(Value), '%'], St)
+  case startswith, Col, Value, St: like(Col, ' LIKE ', [like_escape(Value), '%'], St)
+  case istartswith, Col, Value, St: like(Col, ' ILIKE ', [like_escape(Value), '%'], St)
+  case endswith, Col, Value, St: like(Col, ' LIKE ', ['%', like_escape(Value)], St)
+  case iendswith, Col, Value, St: like(Col, ' ILIKE ', ['%', like_escape(Value)], St)
+  case `in`, _Col, [], St: ('FALSE', St)
+  case `in`, Col, Values, St when is_list(Values):
+    (P, St1) = param(Values, St)
+    ([Col, ' = ANY(', P, ')'], St1)
+  case `in`, Col, Query, St:
+    (Sql, St1) = value_sql(Query, St)
+    ([Col, ' IN ', Sql], St1)
+  case isnull, Col, true, St: ([Col, ' IS NULL'], St)
+  case isnull, Col, false, St: ([Col, ' IS NOT NULL'], St)
+  case range, Col, (From, To), St:
+    (V1, St1) = value_sql(From, St)
+    (V2, St2) = value_sql(To, St1)
+    ([Col, ' BETWEEN ', V1, ' AND ', V2], St2)
+end
+
+fn binop @private
+  case Col, Op, Value, St:
+    (V, St1) = value_sql(Value, St)
+    ([Col, Op, V], St1)
+end
+
+fn like @private
+  case Col, Op, Pattern, St: binop(Col, Op, iolist_to_binary(Pattern), St)
+end
+
+fn like_escape @private
+  @doc("escape the LIKE wildcards in Value, returns a binary")
+  case Value:
+    Bin = unicode.characters_to_binary(Value)
+    re.replace(Bin, "[\\\\%_]", "\\\\&", [global, (return, binary)])
+end
+
+fn order_sql @private
+  case [], St: ([], St)
+  case Items, St:
+    (Parts, St1) = lists.mapfoldl(fn order_item:2, St, Items)
+    ([' ORDER BY ', lists.join(', ', Parts)], St1)
+end
+
+fn order_item @private
+  case (desc, Key), St: order_column(Key, ' DESC', St)
+  case (asc, Key), St: order_column(Key, ' ASC', St)
+  case Key, St when is_atom(Key): order_column(Key, ' ASC', St)
+  case Key, St:
+    match unicode.characters_to_binary(Key):
+      case #b {#c "-": _, Rest: binary}: order_column(Rest, ' DESC', St)
+      case Bin: order_column(Bin, ' ASC', St)
+    end
+end
+
+fn order_column @private
+  @doc("order by a selected values key (aggregates included) or a field path")
+  case Key, Dir, St:
+    KeyBin = orm.schema.to_binary(Key)
+    match lists.member(KeyBin, maps.get(outputs, St)):
+      case true: ([quote(KeyBin), Dir], St)
+      case false:
+        (Col, St1) = resolve_path(split_key(Key), left, St)
+        ([Col, Dir], St1)
+    end
+end
+
+fn distinct_sql @private
+  case Query:
+    match maps.get(distinct, Query):
+      case true: 'DISTINCT '
+      case false: []
+    end
+end
+
+fn limit_sql @private
+  case Query:
+    Limit = match maps.get(limit, Query):
+      case nil: []
+      case L: [' LIMIT ', integer_to_binary(L)]
+    end
+    Offset = match maps.get(offset, Query):
+      case nil: []
+      case O: [' OFFSET ', integer_to_binary(O)]
+    end
+    [Limit, Offset]
+end

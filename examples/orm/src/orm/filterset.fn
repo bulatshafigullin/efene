@@ -1,0 +1,198 @@
+@import(orm.query, [filter/2, order_by/2, limit/2, offset/2])
+
+fn apply
+  @doc("refine Query with request params (a list of (Name, Value) binaries, like a
+  parsed query string, a name can repeat) using the filters FilterSet declares:
+
+    {filters: {Name: (Target, Type), ...},
+     ordering: {Name: Field, ...},
+     default_ordering: [Field...],
+     default_page_size: 20,
+     max_page_size: 100}
+
+  Target is a lookup like price_cents__gte, the parsed value is filtered with it,
+  or a function (Query, Value) -> Query. Type is text, int, money (\"10.50\" -> 1050),
+  bool, (choice, [atom...]) or (list, Type) (repeated or comma separated values).
+  The ordering param is a comma separated list of names of ordering, - for
+  descending, page and page_size paginate.
+  Params are matched against the declared names, no atoms are created from them.
+  Returns (ok, Query, {page: Page, page_size: Size}) or (error, [(Param, Message)])
+  with every invalid or unknown param")
+  case Query, FilterSet, Params:
+    Grouped = group_params(Params)
+    Filters = maps.get(filters, FilterSet)
+    (Query1, Errors1) = lists.foldl(fn case (Name, Values), (Q, Errs):
+                                      match lists.member(Name, reserved()):
+                                        case true: (Q, Errs)
+                                        case false: apply_param(Name, Values, Filters, Q, Errs)
+                                      end
+                                    end, (Query, []), Grouped)
+    (Query2, Errors2) = apply_ordering(param_values('ordering', Grouped), FilterSet,
+                                       Query1, Errors1)
+    DefaultSize = maps.get(default_page_size, FilterSet, 20)
+    MaxSize = maps.get(max_page_size, FilterSet, 100)
+    (Page, Errors3) = int_param('page', Grouped, 1, 1, nil, Errors2)
+    (Size, Errors4) = int_param('page_size', Grouped, DefaultSize, 1, MaxSize, Errors3)
+    match Errors4:
+      case []: (ok, Query2, {page: Page, page_size: Size})
+      case _: (error, lists.reverse(Errors4))
+    end
+end
+
+fn paginate
+  @doc("limit Query to the page returned by apply/3")
+  case Query, Pagination:
+    Size = maps.get(page_size, Pagination)
+    offset(limit(Query, Size), (maps.get(page, Pagination) - 1) * Size)
+end
+
+fn reserved @private
+  case: ['ordering', 'page', 'page_size']
+end
+
+fn group_params @private
+  @doc("[(a, 1), (b, 2), (a, 3)] -> [(a, [1, 3]), (b, [2])], keeps the order")
+  case Params:
+    lists.foldl(fn case (Name, Value), Acc:
+                  match lists.keyfind(Name, 1, Acc):
+                    case false: Acc ++ [(Name, [Value])]
+                    case (_, Values): lists.keyreplace(Name, 1, Acc, (Name, Values ++ [Value]))
+                  end
+                end, [], Params)
+end
+
+fn param_values @private
+  case Name, Grouped:
+    match lists.keyfind(Name, 1, Grouped):
+      case false: []
+      case (_, Values): Values
+    end
+end
+
+fn apply_param @private
+  case Name, Values, Filters, Query, Errors:
+    match orm.schema.find_named(Name, maps.keys(Filters)):
+      case nil:
+        (Query, (Name, unknown('filter', maps.keys(Filters))) :: Errors)
+      case Key:
+        (Target, Type) = maps.get(Key, Filters)
+        match parse(Type, Values):
+          case (ok, Value): (apply_target(Target, Query, Value), Errors)
+          case (error, Message): (Query, (Name, Message) :: Errors)
+        end
+    end
+end
+
+fn apply_target @private
+  case Target, Query, Value when is_function(Target, 2): Target(Query, Value)
+  case Lookup, Query, Value: filter(Query, maps.put(Lookup, Value, {}))
+end
+
+fn parse @private
+  case (list, Type), Values:
+    Items = lists.append((for V in Values: binary.split(V, ',', [global]) end))
+    Parsed = for Item in Items: parse_value(Type, Item) end
+    Messages = for (error, Message) in Parsed: Message end
+    match Messages:
+      case []: (ok, (for (ok, Value) in Parsed: Value end))
+      case Message :: _: (error, Message)
+    end
+  case Type, [Value]: parse_value(Type, Value)
+  case _Type, _Values: (error, 'given more than once')
+end
+
+fn parse_value @private
+  case text, '': (error, 'must not be empty')
+  case text, Value: (ok, Value)
+  case int, Value:
+    try
+      (ok, binary_to_integer(Value))
+    catch
+      case error, badarg: (error, 'must be an integer')
+    end
+  case money, Value:
+    match re.run(Value, "^([0-9]{1,9})(?:\\.([0-9]{1,2}))?$", [(capture, all_but_first, binary)]):
+      case (`match`, [Whole]): (ok, binary_to_integer(Whole) * 100)
+      case (`match`, [Whole, Fraction]): (ok, binary_to_integer(Whole) * 100 + cents(Fraction))
+      case nomatch: (error, 'must be an amount like 10 or 10.50')
+    end
+  case bool, Value:
+    match string.lowercase(Value):
+      case 'true': (ok, true)
+      case '1': (ok, true)
+      case 'yes': (ok, true)
+      case 'false': (ok, false)
+      case '0': (ok, false)
+      case 'no': (ok, false)
+      case _: (error, 'must be true or false')
+    end
+  case (choice, Choices), Value:
+    match orm.schema.find_named(Value, Choices):
+      case nil: (error, unknown('value', Choices))
+      case Choice: (ok, Choice)
+    end
+end
+
+fn cents @private
+  case '': 0
+  case #b {D: 8}: (D - #c "0") * 10
+  case Fraction: binary_to_integer(Fraction)
+end
+
+fn apply_ordering @private
+  case [], FilterSet, Query, Errors:
+    Pk = orm.schema.primary_key(maps.get(model, Query))
+    (order_by(Query, maps.get(default_ordering, FilterSet, []) ++ [Pk]), Errors)
+  case [Value], FilterSet, Query, Errors:
+    Allowed = maps.get(ordering, FilterSet, {})
+    Parsed = for Item in binary.split(Value, ',', [global]): ordering_item(Item, Allowed) end
+    Messages = for (error, Message) in Parsed: Message end
+    match Messages:
+      case []:
+        Pk = orm.schema.primary_key(maps.get(model, Query))
+        (order_by(Query, (for (ok, Item) in Parsed: Item end) ++ [Pk]), Errors)
+      case Message :: _:
+        (Query, ('ordering', Message) :: Errors)
+    end
+  case _Values, _FilterSet, Query, Errors:
+    (Query, ('ordering', 'given more than once') :: Errors)
+end
+
+fn ordering_item @private
+  @doc("price -> (asc, price_cents), -price -> (desc, price_cents), the name
+  has to be in the ordering of the filterset")
+  case Item, Allowed:
+    (Dir, Name) = match Item:
+      case #b {#c "-": _, Rest: binary}: (desc, Rest)
+      case _: (asc, Item)
+    end
+    match orm.schema.find_named(Name, maps.keys(Allowed)):
+      case nil: (error, unknown('ordering', maps.keys(Allowed)))
+      case Key: (ok, (Dir, maps.get(Key, Allowed)))
+    end
+end
+
+fn int_param @private
+  case Name, Grouped, Default, Min, Max, Errors:
+    match param_values(Name, Grouped):
+      case []: (Default, Errors)
+      case [Value]:
+        match parse_value(int, Value):
+          case (ok, N) when N >= Min and (Max == nil or N <= Max): (N, Errors)
+          case (ok, _): (Default, (Name, range_message(Min, Max)) :: Errors)
+          case (error, Message): (Default, (Name, Message) :: Errors)
+        end
+      case _: (Default, (Name, 'given more than once') :: Errors)
+    end
+end
+
+fn range_message @private
+  case Min, nil: iolist_to_binary(io_lib.format("must be at least ~p", [Min]))
+  case Min, Max: iolist_to_binary(io_lib.format("must be between ~p and ~p", [Min, Max]))
+end
+
+fn unknown @private
+  case What, Names:
+    Sorted = lists.sort((for N in Names: orm.schema.to_binary(N) end))
+    iolist_to_binary(['unknown ', What, ', use one of: ', lists.join(', ', Sorted)])
+end

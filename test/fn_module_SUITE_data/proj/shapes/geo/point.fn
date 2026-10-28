@@ -1,0 +1,1 @@
+fn new @public case X, Y: (point, X, Y, shapes.area(X), #i module) end

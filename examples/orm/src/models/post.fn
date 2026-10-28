@@ -1,0 +1,14 @@
+fn schema
+  case:
+    {table: 'posts',
+     fields: [id, title, body, published, author_id],
+     relations: {author: (belongs_to, `models.user`, author_id),
+                 comments: (has_many, `models.comment`, post_id)}}
+end
+
+fn objects case: orm.query.from(#i module) end
+
+fn create
+  @doc("insert a row, returns it")
+  case Conn, Values: orm.repo.insert(Conn, #i module, Values)
+end

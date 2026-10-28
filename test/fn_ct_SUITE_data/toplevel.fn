@@ -1,0 +1,2 @@
+#ct foo()
+fn f @public case: 1 end

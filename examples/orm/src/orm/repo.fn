@@ -1,0 +1,144 @@
+fn connect
+  @doc("start the postgrex driver and connect, Opts is a map of postgrex options
+  like {hostname: \"localhost\", database: \"mydb\"}, returns (ok, Conn)")
+  case Opts:
+    (ok, _) = application.ensure_all_started(postgrex)
+    `Elixir.Postgrex`.start_link((for (Key, Value) in maps.to_list(Opts): (Key, to_binary(Value)) end))
+end
+
+fn all
+  @doc("rows returned by Query as maps of field to value")
+  case Conn, Query:
+    Rows = rows(run(Conn, orm.sql.select(Query)))
+    match (maps.get(select, Query), maps.get(related, Query)):
+      case (all, _ :: _): for Row in Rows: nest(Row) end
+      case _: Rows
+    end
+end
+
+fn first
+  @doc("first row of Query (ordered by primary key if it has no ordering) or nil")
+  case Conn, Query:
+    Model = maps.get(model, Query)
+    Ordered = match maps.get(order, Query):
+      case []: orm.query.order_by(Query, [orm.schema.primary_key(Model)])
+      case _: Query
+    end
+    match all(Conn, orm.query.limit(Ordered, 1)):
+      case []: nil
+      case [Row]: Row
+    end
+end
+
+fn get
+  @doc("the only row of Query: (ok, Row), (error, not_found) or (error, multiple_found)")
+  case Conn, Query:
+    match all(Conn, orm.query.limit(Query, 2)):
+      case []: (error, not_found)
+      case [Row]: (ok, Row)
+      case _: (error, multiple_found)
+    end
+end
+
+fn get
+  @doc("the only row of Query that matches Cond, see get/2")
+  case Conn, Query, Cond: get(Conn, orm.query.filter(Query, Cond))
+end
+
+fn count
+  case Conn, Query:
+    [[Count]] = maps.get(rows, run(Conn, orm.sql.count(Query)))
+    Count
+end
+
+fn exists
+  case Conn, Query: count(Conn, orm.query.limit(Query, 1)) > 0
+end
+
+fn update
+  @doc("update the rows of Query with Changes, returns the number of updated rows")
+  case Conn, Query, Changes: maps.get(num_rows, run(Conn, orm.sql.update(Query, Changes)))
+end
+
+fn delete
+  @doc("delete the rows of Query, returns the number of deleted rows")
+  case Conn, Query: maps.get(num_rows, run(Conn, orm.sql.delete(Query)))
+end
+
+fn insert
+  @doc("insert a row of Model, returns the inserted row")
+  case Conn, Model, Values:
+    [Row] = rows(run(Conn, orm.sql.insert(Model, Values)))
+    Row
+end
+
+fn raw
+  @doc("run a SQL statement, returns the rows as maps")
+  case Conn, Sql, Params: rows(run(Conn, (to_binary(Sql), Params)))
+end
+
+fn execute
+  @doc("run a SQL statement, returns the number of affected rows")
+  case Conn, Sql: maps.get(num_rows, run(Conn, (to_binary(Sql), [])))
+end
+
+fn transaction
+  @doc("run Fun(Conn) in a transaction, returns (ok, Result) or (error, Reason)
+  if rollback/2 was called, if Fun raises the transaction is rolled back and the
+  error raised again")
+  case Conn, Fun: `Elixir.Postgrex`.transaction(Conn, Fun)
+end
+
+fn rollback
+  @doc("roll back the transaction Conn belongs to, transaction/2 returns (error, Reason)")
+  case Conn, Reason: `Elixir.Postgrex`.rollback(Conn, Reason)
+end
+
+fn run @private
+  case Conn, (Sql, Params):
+    match `Elixir.Postgrex`.query(Conn, Sql, Params):
+      case (ok, Result): Result
+      case (error, Error):
+        erlang.error((orm_query_error, `Elixir.Exception`.message(Error), Sql, Params))
+    end
+end
+
+fn rows @private
+  case Result:
+    Columns = for C in maps.get(columns, Result): binary_to_atom(C) end
+    for Row in maps.get(rows, Result): maps.from_list(lists.zip(Columns, Row)) end
+end
+
+fn nest @private
+  @doc("{title: .., author__name: ..} -> {title: .., author: {name: ..}}")
+  case Row:
+    Nested = lists.foldl(fn case (Key, Value), Acc:
+                           Path = for P in binary.split(atom_to_binary(Key), '__', [global]):
+                             binary_to_atom(P)
+                           end
+                           deep_put(Path, Value, Acc)
+                         end, {}, maps.to_list(Row))
+    maps.map(fn case _Key, Value: collapse(Value) end, Nested)
+end
+
+fn deep_put @private
+  case [Key], Value, Map: maps.put(Key, Value, Map)
+  case Key :: Rest, Value, Map:
+    maps.put(Key, deep_put(Rest, Value, maps.get(Key, Map, {})), Map)
+end
+
+fn collapse @private
+  @doc("a related row with all its fields null means there's no related row")
+  case Value when is_map(Value):
+    Collapsed = maps.map(fn case _Key, V: collapse(V) end, Value)
+    match lists.all(fn case V: V == nil end, maps.values(Collapsed)):
+      case true: nil
+      case false: Collapsed
+    end
+  case Value: Value
+end
+
+fn to_binary @private
+  case Value when is_list(Value): unicode.characters_to_binary(Value)
+  case Value: Value
+end

@@ -1,0 +1,88 @@
+## line comment
+@const(TTL) -> 12 * 3600
+@const(LIMIT) -> 10
+
+fn ttl = #m TTL
+
+fn clock @private = erlang.monotonic_time(second)
+
+fn clock_for_test = clock()
+
+fn double(X) = X * 2
+
+fn is_big @guard case N: N > #m LIMIT end
+
+fn big
+  case N when is_big(N): yes  ## trailing comment
+  else: no
+end
+
+fn greet
+  case Name, Greeting := 'hello', Punct := '!':
+    '#{Greeting}, #{Name}#{Punct}'
+end
+
+fn greet_list case N: "n=#{N} f=#{1.5} a=#{abc}" end
+
+fn cfg
+  case K:
+    match K:
+      case a: ok(1)
+      case b: err(nope)
+    end
+end
+
+fn check
+  case A, B:
+    with (ok, X) = cfg(A); (ok, Y) = cfg(B):
+      X + Y
+    end
+end
+
+fn check2
+  case A, B:
+    with (ok, X) = cfg(A); (ok, Y) = cfg(B):
+      X + Y
+    else:
+      failed
+    end
+end
+
+fn check3
+  case A, B:
+    with (ok, X) = cfg(A); (ok, Y) = cfg(B):
+      X + Y
+    else
+      case (error, nope): nope_found
+      else: other
+    end
+end
+
+fn safe
+  case X: try! binary_to_integer(X) else -1
+end
+
+fn piped
+  case L:
+    match L -> lists.reverse():
+      case H :: _: H
+      else: none
+    end
+end
+
+fn len_ok case X when is_integer(X): ok(X) end
+
+fn own_ok
+  case X: (mine, X)
+end
+
+fn comment_in_string case: "not ## a comment" end
+
+fn escaped case: 'literal \#{x}' end
+
+fn get_id(P) = P.id
+fn get_deep(P) = P.user.name
+fn get_key(M, K) = M[K]
+fn get_default(M) = M['name', nil]
+fn mixed(M) = M['user'].name
+fn has_id case P when P.id > 1: big else: small end

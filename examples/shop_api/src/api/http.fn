@@ -1,0 +1,14 @@
+fn json
+  @doc("reply with Status and Body encoded as JSON")
+  case Status, Body, Req:
+    cowboy_req.reply(Status, {'content-type': 'application/json'}, json.encode(Body), Req)
+end
+
+fn error
+  case Status, Message, Req: json(Status, {error: Message}, Req)
+end
+
+fn money
+  @doc("1050 -> <<\"10.50\">>")
+  case Cents: iolist_to_binary(io_lib.format("~b.~2..0b", [Cents // 100, Cents % 100]))
+end

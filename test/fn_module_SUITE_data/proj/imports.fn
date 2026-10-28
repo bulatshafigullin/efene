@@ -1,0 +1,6 @@
+@import(shapes.geo.point, [new/2])
+
+fn main case:
+  Point = shapes.geo.point
+  (new(1, 2), Point.new(3, 4), Point)
+end

@@ -20,7 +20,7 @@ Nonterminals
     kv_key kv_val l_map l_map_update
     e_bool
     e_case e_cases e_case_cond e_case_else e_else_only_case
-    e_switch e_receive e_try
+    e_switch e_receive e_try e_with with_items fn_params
     e_when e_when_cond e_when_else e_when_final_else e_when_elses
     e_begin
     e_for for_items for_item
@@ -29,12 +29,12 @@ Nonterminals
     e_call e_call_do e_call_thread e_call_thread_funs
     e_assign e_send
     e_bool_and e_comp e_concat e_add e_mul e_unary
-    path path_item
+    path path_item e_access
     e_def_tl.
 
 Terminals
     fn atom var integer float boolean string bstring colon end nl case else match when
-    begin receive after try catch for in
+    begin receive after try catch for in with coloneq
     hash open close sep semicolon open_list close_list
     open_map close_map cons_op at arrow arrowend dot larrow larrowend
     assign send_op
@@ -65,6 +65,19 @@ e_fn_tl -> fn l_atom attrs e_case end:
     Attrs = '$3',
     Cases = '$4',
     {expr, line('$1'), fn, {Name, Attrs, Cases}}.
+
+% fn name = expr, fn name(params) = expr, attributes go before the =
+e_fn_tl -> fn l_atom assign expr:
+    fn_shorthand('$1', '$2', [], [], '$4').
+e_fn_tl -> fn l_atom attrs assign expr:
+    fn_shorthand('$1', '$2', [], '$3', '$5').
+e_fn_tl -> fn l_atom fn_params assign expr:
+    fn_shorthand('$1', '$2', '$3', [], '$5').
+e_fn_tl -> fn l_atom fn_params attrs assign expr:
+    fn_shorthand('$1', '$2', '$3', '$4', '$6').
+
+fn_params -> open close : [].
+fn_params -> open seq_items close : '$2'.
 
 e_def_tl -> def l_atom colon e_case end:
     Name = '$2',
@@ -111,6 +124,9 @@ e_cases -> e_case_cond : ['$1'].
 e_cases -> e_case_cond e_case_else : ['$1', '$2'].
 e_cases -> e_case_cond e_cases : ['$1'|'$2'].
 
+e_switch -> match e_call_thread colon e_case end:
+    {expr, line('$1'), switch, {'$2', '$4'}}.
+
 e_switch -> match seq_items colon e_case end:
     case '$2' of
         [Item] ->
@@ -136,6 +152,24 @@ e_try -> try body catch e_else_only_case end:
 
 e_try -> try body catch e_else_only_case after body end:
     {expr, line('$1'), 'try', {'$2', '$4', '$6'}}.
+
+% try! expr else default: the default replaces any error raised by expr
+e_try -> try send_op expr else expr:
+    Line = line('$1'),
+    Default = '$5',
+    Catch = {expr, Line, 'case', [{cmatch, Line, {[{val, Line, atom, error}, {val, Line, var, '_'}], nowhen, [Default]}}]},
+    {expr, Line, 'try', {['$3'], Catch, noafter}}.
+
+% with Pattern = Expr; ...: body [else: body | else case ...] end
+with_items -> e_assign : ['$1'].
+with_items -> e_assign semicolon with_items : ['$1'|'$3'].
+
+e_with -> with with_items colon body end:
+    {expr, line('$1'), with, {'$2', '$4', noelse}}.
+e_with -> with with_items colon body else colon body end:
+    {expr, line('$1'), with, {'$2', '$4', {expr, line('$5'), 'case', [{cmatch, line('$5'), {[{val, line('$5'), var, '_'}], nowhen, '$7'}}]}}}.
+e_with -> with with_items colon body else e_case end:
+    {expr, line('$1'), with, {'$2', '$4', '$6'}}.
 
 e_when -> e_when_cond end : {expr, line('$1'), 'when', ['$1']}.
 e_when -> e_when_cond e_when_elses end : {expr, line('$1'), 'when', ['$1'|'$2']}.
@@ -193,6 +227,7 @@ expr -> raw_expr : '$1'.
 
 raw_expr -> e_switch : '$1'.
 raw_expr -> e_when: '$1'.
+raw_expr -> e_with: '$1'.
 raw_expr -> e_for: '$1'.
 raw_expr -> e_receive: '$1'.
 raw_expr -> e_try: '$1'.
@@ -214,6 +249,11 @@ path_item -> l_atom : '$1'.
 path_item -> l_var : '$1'.
 
 raw_literal -> l_atom : '$1'.
+% a dotted atom like lib.math (not followed by arguments) is the atom 'lib.math',
+% the name of a nested module (see efene:compile/3)
+raw_literal -> path_item dot path : dotted_atom(['$1'|'$3']).
+% Map['key'], Map['key', Default], Map.key.other['key']
+raw_literal -> e_access : '$1'.
 raw_literal -> l_var : '$1'.
 raw_literal -> l_integer : '$1'.
 raw_literal -> l_float : '$1'.
@@ -231,13 +271,17 @@ raw_literal -> e_begin: '$1'.
 raw_literal -> e_call : '$1'.
 raw_literal -> open expr close : '$2'.
 
+e_access -> l_var open_list seq_items close_list : access('$1', '$3').
+e_access -> e_access open_list seq_items close_list : access('$1', '$3').
+e_access -> e_access dot l_atom : access('$1', ['$3']).
+
 l_atom -> atom : value('$1', atom).
 l_var -> var : value('$1', var).
 l_integer -> integer : value('$1', integer).
 l_float -> float : value('$1', float).
 l_boolean -> boolean : value('$1', boolean).
-l_string -> string : value('$1', string).
-l_bstring -> bstring : value('$1', bstring).
+l_string -> string : string_value('$1', string).
+l_bstring -> bstring : string_value('$1', bstring).
 l_fn -> fn e_case end: expr_raw('$2', fn).
 l_fn -> fn l_var e_case end: {expr, line('$1'), fn, {'$2', '$3'}}.
 l_fn_ref -> fn path colon l_integer : {val, line('$1'), fn_ref, {'$2', '$4'}}.
@@ -314,6 +358,7 @@ e_send -> e_assign : '$1'.
 % woud you make that is that or you have to wrap the right side in parenthesis
 % if it's an expression, which is much more common
 e_assign -> e_bool assign expr : op('$2', '$1', '$3').
+e_assign -> e_bool coloneq e_bool : {default, line('$2'), '$1', '$3'}.
 e_assign -> e_bool : '$1'.
 
 Erlang code.
@@ -328,12 +373,62 @@ line(T) -> ct:print("WAT ~p", [T]).
 
 value(Val, Type) -> {val, line(Val), Type, unwrap(Val)}.
 
+string_value(Tok, Type) ->
+    Line = line(Tok),
+    case unwrap(Tok) of
+        {interp, Parts} ->
+            {expr, Line, interp, {Type, [interp_part(Part, Line) || Part <- Parts]}};
+        String ->
+            {val, Line, Type, String}
+    end.
+
+interp_part({lit, String}, _Line) -> {lit, String};
+interp_part({expr, Source}, Line) ->
+    case fn_lexer:string(Source) of
+        {ok, Tokens, _} ->
+            Tokens1 = [setelement(2, T, Line) || T <- Tokens, element(1, T) =/= nl],
+            try fn_parser:parse(Tokens1) of
+                {ok, [Expr]} -> Expr;
+                _ -> return_error(Line, "invalid expression in string interpolation: " ++ Source)
+            catch
+                _:_ -> return_error(Line, "invalid expression in string interpolation: " ++ Source)
+            end;
+        _ ->
+            return_error(Line, "invalid expression in string interpolation: " ++ Source)
+    end.
+
+fn_shorthand(Fn, Name, Params, Attrs, Expr) ->
+    Line = line(Fn),
+    Cases = {expr, Line, 'case', [{cmatch, Line, {Params, nowhen, [Expr]}}]},
+    {expr, Line, fn, {Name, Attrs, Cases}}.
+
 expr_raw(Val, Type) -> {expr, line(Val), Type, Val}.
 
 seq_value(Val, Line, Type) -> {seq, Line, Type, Val}.
 
 make_attr(Line, Path, Params, Result) ->
     {attr, Line, Path, Params, Result}.
+
+% Map.key.other is Map['key']['other']
+dotted_atom([{val, _, var, _}=Var|Keys]) ->
+    case lists:all(fun ({val, _, atom, _}) -> true; (_) -> false end, Keys) of
+        true -> lists:foldl(fun (Key, Acc) -> access(Acc, [Key]) end, Var, Keys);
+        false -> return_error(line(Var), "only atoms can be joined with dots")
+    end;
+dotted_atom([{val, Line, atom, _}|_]=Items) ->
+    case lists:all(fun ({val, _, atom, _}) -> true; (_) -> false end, Items) of
+        true ->
+            Name = string:join([atom_to_list(V) || {val, _, atom, V} <- Items], "."),
+            {val, Line, atom, list_to_atom(Name)};
+        false ->
+            return_error(Line, "only atoms can be joined with dots")
+    end;
+dotted_atom([First|_]) ->
+    return_error(line(First), "only atoms can be joined with dots").
+
+access(Map, [Key]) -> {expr, line(Map), access, {Map, Key, nodefault}};
+access(Map, [Key, Default]) -> {expr, line(Map), access, {Map, Key, Default}};
+access(Map, _) -> return_error(line(Map), "map access takes a key and an optional default").
 
 op(Op, Left, Right) ->
     {op, line(Op), unwrap(Op), Left, Right}.

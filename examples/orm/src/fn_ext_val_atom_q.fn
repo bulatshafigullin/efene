@@ -1,0 +1,44 @@
+fn handle
+  @doc("compiler extension for the #q tag: #q (A | B & ~C) combines conditions
+  with django style operators, at compile time it becomes
+  orm.q.any([A, orm.q.all([B, orm.q.neg(C)])]), A - B is A & ~B.
+  The operands are any expression that is a condition: a map of lookups, a
+  variable, a call like orm.q.exists(Q). The efene compiler finds it by its
+  name (fn_ext_val_atom_q) in the code path, build it before the code that uses it")
+  case _Path, Ast, State when is_tuple(Ast): to_condition(Ast, State)
+  case _Path, _Ast, _State: next
+end
+
+fn to_condition @private
+  case (op, Line, `|`, Left, Right), State: combine(any, Line, operands(`|`, (op, Line, `|`, Left, Right)), State)
+  case (op, Line, `&`, Left, Right), State: combine(all, Line, operands(`&`, (op, Line, `&`, Left, Right)), State)
+  case (op, Line, `-`, Left, Right), State:
+    combine(all, Line, [Left, (unary_op, Line, `~`, Right)], State)
+  case (unary_op, Line, `~`, Operand), State:
+    (EOperand, State1) = to_condition(Operand, State)
+    (q_call(Line, neg, [EOperand]), State1)
+  case Ast, State: fn_to_erl.ast_to_ast(Ast, State)
+end
+
+fn operands @private
+  @doc("A | B | C is one any([A, B, C]) instead of any([any([A, B]), C])")
+  case Op, (op, _Line, Op, Left, Right): operands(Op, Left) ++ operands(Op, Right)
+  case _Op, Ast: [Ast]
+end
+
+fn combine @private
+  case Fn, Line, Operands, State:
+    (EOperands, State1) = lists.mapfoldl(fn to_condition:2, State, Operands)
+    (q_call(Line, Fn, [list_ast(Line, EOperands)]), State1)
+end
+
+fn q_call @private
+  @doc("erlang ast for orm.q.Fn(Args)")
+  case Line, Fn, Args:
+    (call, Line, (remote, Line, (atom, Line, orm.q), (atom, Line, Fn)), Args)
+end
+
+fn list_ast @private
+  case Line, Items:
+    lists.foldr(fn case Item, Tail: (cons, Line, Item, Tail) end, (nil, Line), Items)
+end

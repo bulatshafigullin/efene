@@ -1,0 +1,21 @@
+fn table @public case: #ct squares(5) end
+
+fn fact_10 @public case: #ct fact(10) end
+
+fn primes @public case: #ct util.math.primes_below(30) end
+
+fn built @public case: #ct (#i module, 1 + 2, "text") end
+
+fn is_answer @public
+  case #ct fact(3): true
+  else: false
+end
+
+fn nested @public case: #ct lists.sum(#ct squares(3)) end
+
+fn squares case N: for I in lists.seq(1, N): I * I end end
+
+fn fact
+  case 0: 1
+  case N: N * fact(N - 1)
+end

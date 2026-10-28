@@ -65,6 +65,7 @@ LArrowEnd   = <<-
 FatArrow    = =>
 Send        = !
 Hash        = #
+Comment     = ##[^\n]*
 At          = @
 
 % string stuff
@@ -120,6 +121,7 @@ Rules.
 {Sep}                    : make_token(sep,          TokenLine, TokenChars).
 {SemiColon}              : make_token(semicolon,    TokenLine, TokenChars).
 {Send}                   : make_token(send_op,      TokenLine, TokenChars).
+{Comment}                : skip_token.
 {Hash}                   : make_token(hash,         TokenLine, TokenChars).
 {At}                     : make_token(at,           TokenLine, TokenChars).
 {ConsOp}                 : make_token(cons_op,      TokenLine, TokenChars).
@@ -183,6 +185,7 @@ is_reserved("match")   -> true;
 is_reserved("receive") -> true;
 is_reserved("try")     -> true;
 is_reserved("when")    -> true;
+is_reserved("with")    -> true;
 
 is_reserved("def")     -> true;
 
@@ -197,8 +200,45 @@ build_atom_string(Chars, Line, Len) ->
   {token, {atom, Line, list_to_atom(String)}}.
 
 build_string(Type, Chars, Line, Len) ->
-  String = unescape_string(lists:sublist(Chars, 2, Len - 2), Line),
-    {token, {Type, Line, String}}.
+  Raw = lists:sublist(Chars, 2, Len - 2),
+  case split_interpolation(Raw, Line, [], []) of
+    [{lit, String}] -> {token, {Type, Line, String}};
+    Parts -> {token, {Type, Line, {interp, Parts}}}
+  end.
+
+% "a #{expr} b" -> [{lit, "a "}, {expr, "expr"}, {lit, " b"}], the string is
+% still escaped here, \#{ is a literal #{
+split_interpolation([], Line, Lit, Parts) ->
+  lists:reverse([{lit, lit_string(Lit, Line)}|Parts]);
+split_interpolation([$\\, C|Rest], Line, Lit, Parts) ->
+  split_interpolation(Rest, Line, [C, $\\|Lit], Parts);
+split_interpolation([$#, ${|Rest], Line, Lit, Parts) ->
+  {Expr, Rest1} = interpolation_expr(Rest, Line, 0, []),
+  Parts1 = [{expr, Expr}, {lit, lit_string(Lit, Line)}|Parts],
+  split_interpolation(Rest1, Line, [], Parts1);
+split_interpolation([C|Rest], Line, Lit, Parts) ->
+  split_interpolation(Rest, Line, [C|Lit], Parts).
+
+lit_string(Lit, Line) -> unescape_string(lists:reverse(Lit), Line).
+
+interpolation_expr([], Line, _Depth, _Acc) ->
+  throw({error, {Line, fn_lexer, ["unterminated string interpolation"]}});
+interpolation_expr([$}|Rest], _Line, 0, Acc) ->
+  {lists:reverse(Acc), Rest};
+interpolation_expr([$}=C|Rest], Line, Depth, Acc) ->
+  interpolation_expr(Rest, Line, Depth - 1, [C|Acc]);
+interpolation_expr([${=C|Rest], Line, Depth, Acc) ->
+  interpolation_expr(Rest, Line, Depth + 1, [C|Acc]);
+interpolation_expr([$\\, C|Rest], Line, Depth, Acc) ->
+  interpolation_expr(Rest, Line, Depth, [C, $\\|Acc]);
+interpolation_expr([Q|Rest], Line, Depth, Acc) when Q == $"; Q == $'; Q == $` ->
+  {Quoted, Rest1} = lists:splitwith(fun (C) -> C =/= Q end, Rest),
+  case Rest1 of
+    [] -> throw({error, {Line, fn_lexer, ["unterminated string interpolation"]}});
+    [_|Rest2] -> interpolation_expr(Rest2, Line, Depth, lists:reverse([Q|Quoted] ++ [Q]) ++ Acc)
+  end;
+interpolation_expr([C|Rest], Line, Depth, Acc) ->
+  interpolation_expr(Rest, Line, Depth, [C|Acc]).
 
 unescape_string(String, Line) -> unescape_string(String, Line, []).
 
@@ -217,6 +257,7 @@ map_escaped_char(Escaped, Line) ->
     $\" -> $\";
     $\' -> $\';
     $\( -> $(;
+    $# -> $#;
     $b -> $\b;
     $d -> $\d;
     $e -> $\e;

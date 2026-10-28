@@ -1,0 +1,52 @@
+fn start
+  @doc("connect to the database, create and fill the tables and start the HTTP server")
+  case:
+    (ok, _) = shop.db.connect()
+    shop.db.setup(shop.db.conn())
+    shop.db.seed(shop.db.conn())
+    (ok, _) = application.ensure_all_started(cowboy)
+    Routes = [api.products.route(), api.categories.route()]
+    Dispatch = cowboy_router.compile([(`_`, Routes)])
+    (ok, _) = cowboy.start_clear(shop_http, [(port, port())], {env: {dispatch: Dispatch}})
+    io.format("listening on http://localhost:~p~n", [port()])
+end
+
+fn port
+  case:
+    match os.getenv("SHOP_PORT"):
+      case false: 8088
+      case Port: list_to_integer(Port)
+    end
+end
+
+fn demo
+  @doc("start the server, make some requests to it and print the responses")
+  case:
+    start()
+    lists.foreach(fn request:1, requests())
+    cowboy.stop_listener(shop_http)
+end
+
+fn requests
+  case:
+    [(get, "/categories"),
+     (get, "/products"),
+     (get, "/products?category=laptops,phones&ordering=-price"),
+     (get, "/products?min_price=30&max_price=999.99&in_stock=true&ordering=category,-price"),
+     (get, "/products?q=usb&ordering=price"),
+     (get, "/products?category=accessories&category=phones&page=2&page_size=2"),
+     (get, "/products?min_price=ten&colour=red&in_stock=maybe&ordering=weight&page=0"),
+     (post, "/products")]
+end
+
+fn request
+  case (Method, Path):
+    Url = "http://localhost:" ++ integer_to_list(port()) ++ Path
+    HttpRequest = match Method:
+      case get: (Url, [])
+      case post: (Url, [], "application/json", "{}")
+    end
+    (ok, ((_, Status, _), _Headers, Body)) = httpc.request(Method, HttpRequest, [], [(body_format, binary)])
+    io.format("~n~s ~s~n~p~n~s~n", [string.uppercase(atom_to_list(Method)), Path, Status,
+                                    json.format(json.decode(Body))])
+end

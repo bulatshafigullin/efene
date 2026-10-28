@@ -37,15 +37,19 @@ type_to_string(invalid_type_value) -> <<"Invalid Type Value">>;
 type_to_string(invalid_type_argument) -> <<"Invalid Type Argument">>;
 type_to_string(invalid_catch) -> <<"Invalid Catch">>;
 type_to_string(duplicated_function_spec) -> <<"Duplicated Function Spec">>;
+type_to_string(invalid_module_path) -> <<"Invalid Module Path">>;
+type_to_string(ct_error) -> <<"Compile Time Evaluation Error">>;
 type_to_string(Other) -> atom_to_list(Other).
 
-format_maybe_ast({ast, Ast}) -> fn_pp:print(Ast);
+% fn_pp prints erlang ast, errors carry efene ast so print it as a term
+format_maybe_ast({ast, Ast}) -> io_lib:format("~p", [Ast]);
 format_maybe_ast(Other) -> io_lib:format("~p", [Other]).
 
 details_to_string({expected, Expected, got, Got}) when is_list(Expected) ->
     io_lib:format("Expected ~s got ~s", [Expected, format_maybe_ast(Got)]);
 details_to_string({expected, Expected, got, Got}) ->
     io_lib:format("Expected ~p got ~s", [Expected, format_maybe_ast(Got)]);
+details_to_string({message, Msg}) -> io_lib:format("~s", [Msg]);
 details_to_string(Other) -> format_maybe_ast(Other).
 
 to_bs(V) when is_list(V) -> list_to_binary(V);

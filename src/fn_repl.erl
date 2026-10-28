@@ -85,7 +85,10 @@ str_to_erl_ast(String, Module) ->
     State = State0#{level => 1},
 
     case efene:str_to_ast(String) of
-        {ok, Ast} -> {ok, fn_to_erl:ast_to_ast(Ast, State)};
+        % in the shell everything runs right away, #ct is just evaluated
+        {ok, Ast} ->
+            {EAst, State1} = fn_to_erl:ast_to_ast(Ast, State),
+            {ok, {fn_ct:strip(EAst), State1}};
         Other -> Other
     end.
 

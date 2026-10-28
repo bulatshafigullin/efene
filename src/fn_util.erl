@@ -23,11 +23,12 @@ get_fn_attrs(#{attrs:=Attrs}) ->
                      (_) -> false end, Attrs).
 
 
-is_public_attr({attr, _, [?V(_, atom, public)], noparams, noresult}) -> true;
-is_public_attr(_) -> false.
+is_private_attr({attr, _, [?V(_, atom, private)], noparams, noresult}) -> true;
+is_private_attr(_) -> false.
 
+% functions are public (exported) unless they have the @private attribute
 is_public_fn({fn, _Line, _Fn, Attrs}) ->
-    lists:any(fun is_public_attr/1, Attrs);
+    not lists:any(fun is_private_attr/1, Attrs);
 is_public_fn(_) -> false.
 
 get_exported_fns(State) ->

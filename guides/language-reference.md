@@ -465,6 +465,41 @@ Current function arity:
 
     FnArity = #i function_arity
 
+### Compile Time Function Execution
+
+Tagging a function call (or any expression in parenthesis) with **#ct** runs it while compiling and puts the value it returns in the code, like a literal:
+
+    fn table case: #ct squares(10) end
+
+    fn primes case: #ct util.math.primes_below(100) end
+
+    fn config case: #ct (#i module, 1 + 2, "text") end
+
+    fn squares case N: for I in lists.seq(1, N): I * I end end
+
+The compiled module contains the list of squares, not the call to **squares**.
+
+**#ct** expressions can call:
+
+* Any function in the same module, even the ones defined after it or @private, they run in a temporary copy of the module.
+* Functions in efene modules found in the import roots (see [Import Roots](#import-roots)), they are compiled and loaded for the evaluation, if a module is only used in **#ct** expressions it's not compiled to a .beam file.
+* Functions in any Erlang module available to the compiler, like **lists** or **maps**.
+
+They can be nested and they can be used in patterns and guards:
+
+    fn is_answer
+      case #ct fact(3): true
+      else: false
+    end
+
+    fn nested case: #ct lists.sum(#ct squares(3)) end
+
+A **#ct** expression can't use variables, they are only known at runtime, and the value it returns must be something that can be written as a literal (numbers, atoms, strings, binaries, lists, tuples, maps), not a function, pid or reference. Errors while evaluating are reported as compile errors.
+
+The formatter (**efene fmt**) keeps the **#ct** expressions as they are. In the shell **#ct** is evaluated like any other expression.
+
+A **#ct** expression in a pattern or guard can't depend on another function's **#ct** pattern or guard, they are evaluated with the others replaced by **_**.
+
 ## Operations
 
 ### Boolean Operations
@@ -914,6 +949,133 @@ Macro Functions are macros that receive arguments and use them to expand its def
     #m Text(1 * 2 + 3)
     #m AddPlusOne(2, 3)
 
+## Modules
+
+Each efene file is one module, there's no syntax to declare a module or its name inside the code.
+
+Modules are nested with directories, like python packages. The file you compile is the entry point, it is named after the file and its directory is the root of the project. Calling a function in (or referencing a function of) a dotted module looks for the module's file under the root and compiles it too, the path is the module name with the dots replaced by directories:
+
+    main.fn                   -> main (the file being compiled)
+    shapes.fn                 -> shapes
+    shapes/geo/point.fn       -> 'shapes.geo.point'
+
+    # in main.fn
+    fn main case:
+      shapes.area(2)
+      shapes.geo.point.new(1, 2)
+      F = fn shapes.geo.point.new:2
+    end
+
+Modules found this way are compiled recursively, the modules they use are looked up in the same roots. A module that isn't found in any root is compiled as a normal call to an Erlang module, that's how **lists.reverse(L)** and **io.format(...)** keep working. A file in a root shadows an Erlang module with the same name.
+
+Each module is compiled to its own .beam file named after the full module name, *shapes.geo.point.beam*, call it from Erlang with the quoted atom: **'shapes.geo.point':new(1, 2)**.
+
+A dotted name that isn't called is the module name as an atom, so it can be
+stored in a variable or imported (see [Import Attribute](#import-attribute-import)):
+
+    Point = shapes.geo.point
+    Point.new(1, 2)
+
+Only atoms can be joined with dots, **X.y** without a call is an error.
+
+### Import Roots
+
+To use modules from other directories add them as import roots, they are looked up in order after the directory of the file being compiled:
+
+    efene beam --root ../libs --root deps/text main.fn out/
+
+**-r** is short for **--root**. From Erlang pass **{roots, [Dir]}** in the compile options:
+
+    efene:compile("main.fn", "out/", [{roots, ["../libs"]}]).
+
+With *../libs/text/upper.fn* a call to **text.upper.up("hi")** compiles that file as the module **'text.upper'**.
+
+## Syntax Shortcuts
+
+### Comments
+
+`##` starts a comment that goes to the end of the line (not inside strings):
+
+    fn one case: 1 end  ## the number one
+
+### With
+
+`with` chains pattern matches, if one of them doesn't match the `else` section handles the value that didn't match, without `else` that value is the result:
+
+    with (ok, Base) = config(url); (ok, Key) = config(key):
+      post(Base, Key)
+    else: (error, unavailable)
+    end
+
+    with (ok, X) = f():
+      X
+    else
+      case (error, not_found): none
+      else: error
+    end
+
+### Default Arguments
+
+Parameters written `Name := Default` are optional, the shorter arities are generated and call the full one. Defaults can use the previous parameters:
+
+    fn greet case Name, Greeting := 'hello': '#{Greeting}, #{Name}' end
+
+defines `greet/1` and `greet/2`. Only trailing parameters can have defaults.
+
+### Constants and Guard Functions
+
+`@const(NAME) -> expr` defines a constant, `#m NAME` expands to the expression where it is used, also in patterns and guards:
+
+    @const(LIMIT) -> 10
+    fn too_big case N when N > #m LIMIT: true else: false end
+
+A function marked `@guard` with one case and one expression is expanded in guards, so it can be used where only guard tests are allowed:
+
+    fn is_session @guard case S: is_binary(S) and S != '' end
+    fn f case S when is_session(S): ok else: error end
+
+### String Interpolation
+
+`#{expr}` inside a string inserts the value, binaries, atoms, numbers and strings are accepted; `\#{` is a literal `#{`:
+
+    Greeting = 'hello #{Name}, you are #{Age}'
+
+### Try!
+
+`try! Expr else Default` is `Default` if `Expr` raises an error:
+
+    try! binary_to_integer(Text) else -1
+
+### Short Function Definitions
+
+`fn name(params) @attrs = expr` is `fn name case params: expr end`:
+
+    fn double(X) = X * 2
+    fn clock @private = erlang.monotonic_time(second)
+
+### Ok and Err
+
+`ok(X)` is `(ok, X)` and `err(X)` is `(error, X)`, in expressions and patterns, unless the module defines a function with that name:
+
+    match f():
+      case ok(V): V
+      case err(R): R
+    end
+
+### Map Access
+
+`Map.key` gets an atom key and `Map[Key]` gets any key, both fail with `badkey` if it's missing and can be used in guards. `Map[Key, Default]` returns the default instead. They can be chained:
+
+    Id = Principal.id
+    Name = Body.user.name
+    Sub = Body['sub']
+    Roles = Body['roles', []]
+    First = Body['items'].first
+
+### Threading in Match
+
+The value of a `match` can be a threaded call: `match L -> lists.reverse(): ... end`.
+
 ## Module Level Expressions
 
 ### Top Level Function
@@ -934,9 +1096,9 @@ Simples function:
 
 Simple with attributes:
 
-    fn one @public case: 1 end
+    fn one @private case: 1 end
 
-    fn two @public
+    fn two
       @doc("returns the number two")
       case: 2
     end
@@ -966,9 +1128,15 @@ Cases with else:
 
 #### Well Known Function Attributes
 
+##### @private
+
+Functions are public by default, they are exported and can be used from other modules, @private makes the function available only inside its module:
+
+    fn helper @private case X: X + 1 end
+
 ##### @public
 
-Exports the function to be used from other modules.
+Functions are public by default so @public is not needed, it's still accepted.
 
 ##### @spec
 
@@ -982,7 +1150,7 @@ Defines the types of function arguments and return type for current function.
 
     @export(hello/0, plus/2)
 
-Has the same behavior as adding the @public attribute to a function, exports the function to be used from other modules.
+Exports the functions to be used from other modules, since functions are public by default it's only needed to export functions that have the @private attribute.
 
 ##### Export Type
 
@@ -1071,6 +1239,14 @@ This attribute names a function that is to be run automatically when a module is
 Imported functions. Can be called the same way as local functions, that is, without any module prefix.
 
 Module, an atom, specifies which module to import functions from. Functions is a list similar as for export.
+
+Nested modules are imported by their dotted name, and they are compiled like the modules that are called:
+
+    @import(shapes.geo.point, [new/2])
+
+    fn origin case: new(0, 0) end
+
+Each function is imported by name and arity, an imported name can't also be defined in the module.
 
 #### Include Attribute (include)
 

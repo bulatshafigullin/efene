@@ -1,0 +1,14 @@
+@import(orm.query, [left_join/3, values/2, order_by/2])
+
+fn route case: ("/categories", #i module, {}) end
+
+fn init
+  @doc("cowboy handler for GET /categories, with the number of active products")
+  case Req, State:
+    Query = models.category.objects() ->
+      left_join(products, {active: true}) ->
+      values([slug, name, (count, products__id, products)]) ->
+      order_by([name])
+    Rows = orm.repo.all(shop.db.conn(), Query)
+    (ok, api.http.json(200, {results: Rows}, Req), State)
+end

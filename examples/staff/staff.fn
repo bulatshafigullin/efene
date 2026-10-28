@@ -1,0 +1,223 @@
+fn ttl_seconds
+  @doc("Cookie lifetime, for Max-Age -- Django's session expires on the same clock.")
+  case: 12 * 3600
+end
+
+fn cache_seconds @private case: 15 end
+fn counts_cache_seconds @private case: 5 end
+fn table @private case: moderation_staff_sessions end
+
+fn login
+  case Login, Password: login(Login, Password, {})
+end
+
+fn login
+  @doc("Sign in through Django. Every bad login is invalid_credentials alike, so the console
+    can't tell a guesser which half was wrong.
+    -> (ok, Session, Principal) | (error, invalid_credentials | forbidden | unavailable)
+     | (error, rate_limited, RetryAfter)")
+  case Login, Password, Meta when is_binary(Login), is_binary(Password):
+    Ip = maps.get(ip, Meta, undefined)
+    match moderation.login_throttle.check(Ip, Login):
+      case error, RetryAfter: (error, rate_limited, RetryAfter)
+      case ok:
+        match django("login", {'login': Login, 'password': Password}):
+          case ok, {'session' = Session} = Body when is_binary(Session):
+            open_session(Login, Ip, Session, principal_from(Body))
+          case error, invalid_credentials:
+            moderation.login_throttle.failure(Ip, Login)
+            moderation.log.event(staff_login_failed, {ip: Ip}, warning)
+            (error, invalid_credentials)
+          case error, Reason: (error, Reason)
+          else: (error, unavailable)
+        end
+    end
+end
+
+fn open_session @private
+  case _, _, Session, {roles = []}:
+    django("logout", {'session': Session})
+    (error, forbidden)
+  case Login, Ip, Session, Principal:
+    moderation.login_throttle.success(Login)
+    remember(Session, Principal)
+    audit(maps.get(id, Principal), "staff_login", {ip: Ip})
+    (ok, Session, Principal)
+end
+
+fn principal
+  @doc("The principal behind a cookie value, or error (unknown, ended, or Django unreachable).")
+  case Session when is_binary(Session), Session != '':
+    match cached(Session):
+      case ok, Value: (ok, Value)
+      case miss:
+        match django("session", {'session': Session}):
+          case ok, {'sub' = _} = Body:
+            Principal = principal_from(Body)
+            remember(Session, Principal)
+            (ok, Principal)
+          else: error
+        end
+    end
+  else: error
+end
+
+fn counts
+  @doc("The tab badges of the console in one answer, cached a few seconds.
+    A session that is not a moderator's gets error, as in principal/1.")
+  case Session when is_binary(Session), Session != '':
+    match principal(Session):
+      case ok, {roles = [_ :: _]}:
+        Key = counts_key(Session)
+        match lookup(Key):
+          case ok, Value: (ok, Value)
+          case miss:
+            match django("counts", {'session': Session}):
+              case ok, Body:
+                store(Key, Body, counts_cache_seconds())
+                (ok, Body)
+              case error, invalid_credentials: error
+              case error, _: (error, unavailable)
+            end
+        end
+      else: error
+    end
+  else: error
+end
+
+fn logout
+  @doc("End the session. Idempotent; a failure to reach Django is logged, never raised.")
+  case Session when is_binary(Session), Session != '':
+    Who = cached(Session)
+    forget(Session)
+    safe(fn case: ets.delete(table(), counts_key(Session)) end, ok)
+    match django("logout", {'session': Session}):
+      case ok, _: ok
+      case Other:
+        moderation.log.event(staff_logout_unconfirmed, {result: io_lib.format("~P", [Other, 3])}, error)
+    end
+    match Who:
+      case ok, P: audit(maps.get(id, P), "staff_logout", {})
+      else: ok
+    end
+    ok
+  else: ok
+end
+
+fn sweep
+  case:
+    Now = clock()
+    safe(fn case: ets.select_delete(table(), [((`_`, `_`, `$1`), [(`<`, `$1`, Now)], [true])]) end, ok)
+    ok
+end
+
+fn reset
+  case:
+    safe(fn case: ets.delete_all_objects(table()) end, ok)
+    ok
+end
+
+fn django @private
+  @doc("One call to Django: (ok, Body) on 200, the console-level errors for the statuses Django
+    uses on purpose, unavailable for anything else (down, misconfigured, a 5xx) -- which must
+    not read as wrong password. Only Django's own 401 is wrong login; a 400 never reached the check.")
+  case Action, Payload:
+    match config(staff_url):
+      case ok, Base:
+        match config(internal_api_key):
+          case ok, Key: post(Action, Payload, Base, Key)
+          else: (error, unavailable)
+        end
+      else: (error, unavailable)
+    end
+end
+
+fn post @private
+  case Action, Payload, Base, Key:
+    Url = string.trim(Base, trailing, "/") ++ "/" ++ Action
+    Opts = [(url, Url), (retry, false), (receive_timeout, 10000), ('headers', [('x-internal-key', Key)])]
+    Response = moderation.http.new(Opts) -> req.post([(json, Payload)])
+    match Response:
+      case ok, {status = 200, body = Body} when is_map(Body): (ok, Body)
+      case ok, {status = 401}: (error, invalid_credentials)
+      case ok, {status = 403}: (error, forbidden)
+      case Other:
+        moderation.log.event(staff_django_unavailable,
+          {action: Action, result: io_lib.format("~P", [Other, 3])}, error)
+        (error, unavailable)
+    end
+end
+
+fn principal_from @private
+  case Body: {id: id_string(maps.get('sub', Body)), name: maps.get('name', Body, nil), roles: wrap(maps.get('roles', Body, []))}
+end
+
+fn id_string @private
+  case I when is_integer(I): integer_to_binary(I)
+  case B: B
+end
+
+fn wrap @private
+  case nil: []
+  case L when is_list(L): L
+  case X: [X]
+end
+
+fn config @private
+  case Key:
+    match application.get_env(moderation, Key):
+      case ok, V when is_binary(V), V != '': (ok, V)
+      else: error
+    end
+end
+
+fn cache_key @private
+  @doc("Keyed by a hash so a dump of the table holds no usable session key.")
+  case Session: crypto.hash(sha256, Session)
+end
+
+fn clock @private case: erlang.monotonic_time(second) end
+
+fn counts_key @private
+  case Session: cache_key(iolist_to_binary(["counts:", Session]))
+end
+
+fn cached @private case Session: lookup(cache_key(Session)) end
+
+fn safe @private
+  @doc("ETS table not there yet (or gone): the cache is only an optimisation, so fall back.")
+  case F, Default:
+    try F()
+    catch case error, badarg: Default
+    end
+end
+
+fn lookup @private
+  case Key:
+    safe(fn case:
+      Now = clock()
+      match ets.lookup(table(), Key):
+        case [(_, Principal, Until)] when Until >= Now: (ok, Principal)
+        else: miss
+      end
+    end, miss)
+end
+
+fn store @private
+  case Key, Value, Seconds:
+    safe(fn case: ets.insert(table(), (Key, Value, clock() + Seconds)) end, ok)
+end
+
+fn remember @private
+  case Session, Principal: store(cache_key(Session), Principal, cache_seconds())
+end
+
+fn forget @private
+  case Session: safe(fn case: ets.delete(table(), cache_key(Session)) end, ok)
+end
+
+fn audit @private
+  case UserId, Action, Details:
+    moderation.repo.insert(moderation.schemas.access_log.new(
+      {moderator_id: UserId, action: Action, details: Details}))
+end

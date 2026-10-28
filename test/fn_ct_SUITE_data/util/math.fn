@@ -1,0 +1,5 @@
+fn primes_below @public case N:
+  for I in lists.seq(2, N - 1); when is_prime(I): I end
+end
+
+fn is_prime case N: lists.all(fn case D: N % D != 0 end, lists.seq(2, N - 1)) end
