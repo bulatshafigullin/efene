@@ -58,6 +58,9 @@ Tabs        = \t+
 ConsOp      = ::
 Colon       = :
 Dot         = \.
+DotDot      = \.\.
+QDot        = \?\.
+Question    = \?
 Arrow       = ->
 ArrowEnd    = ->>
 LArrow      = <-
@@ -128,6 +131,9 @@ Rules.
 {At}                     : make_token(at,           TokenLine, TokenChars).
 {ConsOp}                 : make_token(cons_op,      TokenLine, TokenChars).
 {Colon}                  : make_token(colon,        TokenLine, TokenChars).
+{DotDot}                 : make_token(dotdot,       TokenLine, TokenChars).
+{QDot}                   : make_token(qdot,         TokenLine, TokenChars).
+{Question}               : make_token(question,     TokenLine, TokenChars).
 {Dot}                    : make_token(dot,          TokenLine, TokenChars).
 {Arrow}                  : make_token(arrow,        TokenLine, TokenChars).
 {ArrowEnd}               : make_token(arrowend,     TokenLine, TokenChars).
@@ -189,6 +195,9 @@ is_reserved("receive") -> true;
 is_reserved("try")     -> true;
 is_reserved("when")    -> true;
 is_reserved("with")    -> true;
+is_reserved("guard")   -> true;
+is_reserved("defer")   -> true;
+is_reserved("loop")    -> true;
 
 
 

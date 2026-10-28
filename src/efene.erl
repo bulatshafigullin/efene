@@ -399,6 +399,8 @@ clean_tokens([{open_list, _, _}=H, {nl, _, _}|T], Accum) -> clean_tokens([H|T], 
 clean_tokens([{open_map, _, _}=H, {nl, _, _}|T], Accum) -> clean_tokens([H|T], Accum);
 % remove newline after arrows
 clean_tokens([{arrow, _, _}=H, {nl, _, _}|T], Accum) -> clean_tokens([H|T], Accum);
+clean_tokens([{fatarrow, _, _}=H, {nl, _, _}|T], Accum) -> clean_tokens([H|T], Accum);
+clean_tokens([{nl, _, _}, {fatarrow, _, _}=H|T], Accum) -> clean_tokens([H|T], Accum);
 clean_tokens([{arrowend, _, _}=H, {nl, _, _}|T], Accum) -> clean_tokens([H|T], Accum);
 clean_tokens([{larrow, _, _}=H, {nl, _, _}|T], Accum) -> clean_tokens([H|T], Accum);
 clean_tokens([{larrowend, _, _}=H, {nl, _, _}|T], Accum) -> clean_tokens([H|T], Accum);

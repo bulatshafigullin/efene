@@ -135,3 +135,67 @@ fn no_args_spec
   @spec -> ok(user())
   case: ok({})
 end
+
+@assert_ct(1 + 1 is 2)
+
+fn q1
+  case X:
+    Body = lookup(X)?
+    Body * 2
+end
+
+fn lookup
+  case 0: err(zero)
+  case N: ok(N)
+end
+
+fn q_bare
+  case X:
+    lookup(X)?
+    done
+end
+
+fn g1
+  case X:
+    guard (ok, V) = lookup(X) else err(nope)
+    guard V > 5 else err(small)
+    V
+end
+
+fn d1
+  case T:
+    defer ets.delete(T)
+    ets.insert(T, (a, 1))
+    ets.lookup(T, a)
+end
+
+fn pun(Id, UserName) = {id:, user_name:}
+fn pun_match
+  case {id=, user_name=}: (Id, UserName)
+end
+
+fn sq = lists.map(fn(X) = X * X, 1..4)
+fn in_test(X) = X in [1, 2, 3]
+fn in_range(X) = X in 1..10
+fn in_guard
+  case X when X in [a, b]: yes
+  case X when X in 5..9: mid
+  else: no
+end
+
+fn lp
+  case:
+    loop (I = 0, Acc = []):
+      when I == 3: lists.reverse(Acc)
+      else: recur(I + 1, I :: Acc)
+      end
+    end
+end
+
+fn rt(X) = lookup(X) => step(2) => step(10)
+fn step(V, N) = ok(V + N)
+fn bad_step(V) = err(boom)
+fn rt2(X) = lookup(X) => bad_step() => step(1)
+
+fn opt_chain(P) = P?.user?.name
+fn place(Id) = Id -> lists.seq(1, _)

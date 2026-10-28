@@ -4,7 +4,9 @@
 all() -> [comments, consts, guard_fns, fn_shorthand, default_arguments,
           interpolation, ok_err, with, with_else, try_bang, piped_match,
           map_access, multiple_arities, heredoc, map_update, with_guard, literal_interpolation,
-          spec_sugar, map_types_and_empty_specs, reserved_words, error_paths, formatter_keeps_meaning].
+          spec_sugar, map_types_and_empty_specs, reserved_words,
+          try_operator, guard_stmt, defer_stmt, punning, lambda_shorthand, ranges_and_in,
+          loop_recur, result_pipe, optional_chaining, pipe_placeholder, error_paths, formatter_keeps_meaning].
 
 init_per_suite(Config) ->
     OutDir = filename:join(proplists:get_value(priv_dir, Config), "sugar"),
@@ -108,6 +110,49 @@ map_types_and_empty_specs(Config) ->
         [T || {attribute, _, type, {user, T, []}} <- Forms],
     [_] = [S || {attribute, _, spec, {{no_args_spec, 0}, S}} <- Forms].
 
+try_operator(_Config) ->
+    6 = sugar:q1(3),
+    {error, zero} = sugar:q1(0),
+    done = sugar:q_bare(1),
+    {error, zero} = sugar:q_bare(0).
+
+guard_stmt(_Config) ->
+    9 = sugar:g1(9),
+    {error, nope} = sugar:g1(0),
+    {error, small} = sugar:g1(2).
+
+defer_stmt(_Config) ->
+    T = ets:new(t, [public]),
+    [{a, 1}] = sugar:d1(T),
+    undefined = ets:info(T).
+
+punning(_Config) ->
+    #{id := 1, user_name := <<"bob">>} = sugar:pun(1, <<"bob">>),
+    {1, 2} = sugar:pun_match(#{id => 1, user_name => 2}).
+
+lambda_shorthand(_Config) ->
+    [1, 4, 9, 16] = sugar:sq().
+
+ranges_and_in(_Config) ->
+    {true, false} = {sugar:in_test(2), sugar:in_test(9)},
+    {true, false} = {sugar:in_range(5), sugar:in_range(11)},
+    {yes, mid, no} = {sugar:in_guard(a), sugar:in_guard(7), sugar:in_guard(z)}.
+
+loop_recur(_Config) ->
+    [0, 1, 2] = sugar:lp().
+
+result_pipe(_Config) ->
+    {ok, 15} = sugar:rt(3),
+    {error, zero} = sugar:rt(0),
+    {error, boom} = sugar:rt2(3).
+
+optional_chaining(_Config) ->
+    {nil, nil, x, nil} = {sugar:opt_chain(nil), sugar:opt_chain(#{user => nil}),
+                          sugar:opt_chain(#{user => #{name => x}}), sugar:opt_chain(#{})}.
+
+pipe_placeholder(_Config) ->
+    [1, 2, 3] = sugar:place(3).
+
 reserved_words(_Config) ->
     {'def', 'cond', 'let', 'of', 'if'} = sugar:reserved_words().
 
@@ -122,7 +167,8 @@ error_paths(Config) ->
                   Other -> ct:fail({File, expected_error, Other})
               end
       end, ["default_not_trailing.fn", "unterminated_interp.fn", "bad_interp_expr.fn",
-            "bad_access.fn", "bad_access_args.fn", "undefined_const.fn"]).
+            "bad_access.fn", "bad_access_args.fn", "undefined_const.fn",
+            "question_in_args.fn", "bad_loop.fn", "assert_ct_fails.fn"]).
 
 formatter_keeps_meaning(Config) ->
     Out = efene:to_efene(proplists:get_value(src, Config)),

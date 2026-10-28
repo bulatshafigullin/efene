@@ -31,7 +31,7 @@ fn login
             open_session(Login, Ip, Session, principal_from(Body))
           case err(invalid_credentials):
             moderation.login_throttle.failure(Ip, Login)
-            moderation.log.event(staff_login_failed, {ip: Ip}, warning)
+            moderation.log.event(staff_login_failed, {ip:}, warning)
             err(invalid_credentials)
           case err(Reason): err(Reason)
           else: err(unavailable)
@@ -46,7 +46,7 @@ fn open_session
   case Login, Ip, Session, Principal:
     moderation.login_throttle.success(Login)
     remember(Session, Principal)
-    audit(Principal.id, "staff_login", {ip: Ip})
+    audit(Principal.id, "staff_login", {ip:})
     (ok, Session, Principal)
 end
 
@@ -57,12 +57,10 @@ fn principal
     match cached(Session):
       case ok(_) = Hit: Hit
       case miss:
-        with ok({'sub' = _} = Body) = django("session", {'session': Session}):
-          Principal = principal_from(Body)
-          remember(Session, Principal)
-          ok(Principal)
-        else: error
-        end
+        guard ok({'sub' = _} = Body) = django("session", {'session': Session}) else error
+        Principal = principal_from(Body)
+        remember(Session, Principal)
+        ok(Principal)
     end
   else: error
 end
@@ -74,20 +72,18 @@ fn counts
     """)
   @spec(binary() or nil) -> ok(map()) or error or err(unavailable)
   case Session when is_session(Session):
-    with ok({roles = [_ :: _]}) = principal(Session):
-      Key = counts_key(Session)
-      match lookup(Key):
-        case ok(_) = Hit: Hit
-        case miss:
-          match django("counts", {'session': Session}):
-            case ok(Body):
-              store(Key, Body, #m COUNTS_CACHE_SECONDS)
-              ok(Body)
-            case err(invalid_credentials): error
-            case err(_): err(unavailable)
-          end
-      end
-    else: error
+    guard ok({roles = [_ :: _]}) = principal(Session) else error
+    Key = counts_key(Session)
+    match lookup(Key):
+      case ok(_) = Hit: Hit
+      case miss:
+        match django("counts", {'session': Session}):
+          case ok(Body):
+            store(Key, Body, #m COUNTS_CACHE_SECONDS)
+            ok(Body)
+          case err(invalid_credentials): error
+          case err(_): err(unavailable)
+        end
     end
   else: error
 end
@@ -135,10 +131,9 @@ fn django
     """)
   @spec(binary(), map()) -> ok(map()) or err(invalid_credentials or forbidden or unavailable)
   case Action, Payload:
-    with ok(Base) = config(staff_url); ok(Key) = config(internal_api_key):
-      post(Action, Payload, Base, Key)
-    else: err(unavailable)
-    end
+    guard ok(Base) = config(staff_url) else err(unavailable)
+    guard ok(Key) = config(internal_api_key) else err(unavailable)
+    post(Action, Payload, Base, Key)
 end
 
 fn post

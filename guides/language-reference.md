@@ -1099,6 +1099,77 @@ Triple quotes (`"""` for list strings, `'''` for binary strings) keep line break
 
 `ok(T)` and `err(T)` can be used in types: `@spec(integer()) -> ok(atom()) or err(term())`. Maps with required keys are written `{id: integer(), name: binary() or nil}`, `map()` is any map and `@spec -> T` is the spec of a function without arguments.
 
+### Early Exit: ?, guard and defer
+
+In a block of statements (a function body, a `case` body...) `Value?` unwraps an `(ok, V)` and leaves the block with any other value as it is, the rest of the block only runs for the ok values:
+
+    fn price
+      case Id:
+        Product = db.find(Id)?
+        Rate = rates.get(Product.currency)?
+        ok(Product.cents * Rate)
+    end
+
+`Value?` alone is a statement too (`ok` or `(ok, _)` continue, the result is kept if nothing follows). It can't be used inside of other expressions, only as a statement or on the right side of `=`.
+
+`guard Pattern = Expr else Value` continues if the pattern matches and returns `Value` from the block if it doesn't. `guard Condition else Value` does the same with a boolean:
+
+    guard ok(Base) = config(url) else err(unavailable)
+    guard Amount > 0 else err(bad_amount)
+
+`defer Expr` runs `Expr` when the block ends, even when it fails, like `after` in `try`:
+
+    T = ets.new(tmp, [])
+    defer ets.delete(T)
+    work(T)
+
+`guard`, `defer` and `loop` are reserved words now, use backticks to write them as atoms. `@guard` still works as an attribute.
+
+### Anonymous Functions
+
+`fn(X, Y) = expr` is a short anonymous function, it takes everything up to the end of the expression:
+
+    Squares = lists.map(fn(X) = X * X, [1, 2, 3])
+
+### Placeholders and Result Pipes
+
+A `_` argument in a `->` call is replaced by the value instead of adding it as the first argument:
+
+    Id -> lists.seq(1, _)
+
+`=>` is a pipe for functions that return results: the call receives the value of an `(ok, V)` as first argument and the pipe stops at the first result that isn't one:
+
+    parse(Text) => validate() => save(Conn, _)
+
+### Ranges and In
+
+`A..B` is `lists.seq(A, B)`, the ends can be integers, variables, calls or expressions in parenthesis: `for X in 1..10: ...`.
+
+`X in [a, b, c]` and `X in 1..10` can be used in guards (X must be a variable or a literal, in other cases and for other values on the right it calls `lists.member`):
+
+    fn kind case X when X in [a, b]: letter else X when X in 0..9: digit end
+
+### Map Shorthands
+
+`{id:, user_name:}` is `{id: Id, user_name: UserName}`, and in patterns `{id=, user_name=}` binds `Id` and `UserName`. `Map?.key` is `nil` when the map is `nil` (or `undefined`) or the key is missing.
+
+### Loop
+
+`loop (Var = Initial, ...): body end` is a loop, `recur(...)` inside of it starts the next iteration, it should be in tail position:
+
+    loop (I = 0, Acc = []):
+      when I == 3: lists.reverse(Acc)
+      else: recur(I + 1, I :: Acc)
+      end
+    end
+
+### Compile Time Assertions
+
+`@assert_ct(expr)` fails the compilation if the expression isn't true, it is evaluated like `#ct`:
+
+    @const(TTL) -> 12 * 3600
+    @assert_ct(#m TTL > 0)
+
 ### Threading in Match
 
 The value of a `match` can be a threaded call: `match L -> lists.reverse(): ... end`.

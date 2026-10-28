@@ -77,8 +77,20 @@ replace_fn_holders([H|T], State, Accum, EmittedFns) ->
     replace_fn_holders(T, State, [H|Accum], EmittedFns).
 
 ast_to_ast(Nodes, #{level := 0}=State) when is_list(Nodes) ->
-    ast_to_ast(Nodes, [], prescan(Nodes, State));
-ast_to_ast(Nodes, State) when is_list(Nodes) -> ast_to_ast(Nodes, [], State);
+    ast_to_ast(rewrite_stmts(Nodes), [], prescan(Nodes, State));
+ast_to_ast(Nodes, State) when is_list(Nodes) -> ast_to_ast(rewrite_stmts(Nodes), [], State);
+
+%-assert_ct(expr), fails the compilation if the expression isn't true
+ast_to_ast({attr, Line, [?Atom(assert_ct)], [Expr], noresult}, #{level := 0}=State) ->
+    Counter = maps:get(counter, State, 0),
+    Name = list_to_atom("$assert_ct_" ++ integer_to_list(Line) ++ "_" ++ integer_to_list(Counter)),
+    Failed = ?E(Line, call, {[?Atom(Line, erlang), ?Atom(Line, error)],
+                             [?S(Line, tuple, [?Atom(Line, assert_ct_failed), ?V(Line, integer, Line)])]}),
+    Check = ?E(Line, switch, {Expr, ?E(Line, 'case', [{cmatch, Line, {[?V(Line, boolean, true)], nowhen, [?Atom(Line, ok)]}},
+                                                      {celse, Line, [Failed]}])}),
+    Fn = ?E(Line, fn, {?Atom(Line, Name), [],
+                       ?E(Line, 'case', [{cmatch, Line, {[], nowhen, [?LTag(Line, [?Atom(Line, ct)], Check)]}}])}),
+    ast_to_ast(Fn, State#{counter => Counter + 1});
 
 %-const(NAME) -> expr, expanded where #m NAME is used, see prescan/2
 ast_to_ast({attr, _Line, [?Atom(const)], [?Var(_)], Expr}, #{level := 0}=State)
@@ -202,18 +214,11 @@ ast_to_ast(?E(_Line, call_do, {Place, Call, Fun}), State) ->
                         {call, CallLine, FCall, AllArgs}
                 end);
 
-% -> and ->>
+% -> and ->> and =>
 ast_to_ast(?E(_Line, call_thread, {InitialVal, Calls}), State) ->
-    Threaded = lists:foldl(fun (Current, Accum) ->
-                                   {Pos, Call} = Current,
-                                   ?E(CallLine, call, {Fun, Args}) = Call,
-                                   NewArgs = case Pos of
-                                                 first -> [Accum|Args];
-                                                 last -> Args ++ [Accum]
-                                             end,
-                                   ?E(CallLine, call, {Fun, NewArgs})
-                           end, InitialVal, Calls),
-    ast_to_ast(Threaded, State);
+    {Threaded, Counter} = lists:foldl(fun thread_stage/2,
+                                      {InitialVal, maps:get(counter, State, 0)}, Calls),
+    ast_to_ast(Threaded, State#{counter => Counter});
 
 % list
 ast_to_ast(?S(Line, list, Val), State) ->
@@ -384,6 +389,39 @@ ast_to_ast(?E(Line, call, {[Mod, Fun], Args}), State) ->
                 fun (EMod, EFun, EArgs) ->
                         {call, Line, {remote, Line, EMod, EFun}, EArgs}
                 end);
+
+% 1..10
+ast_to_ast(?E(Line, range, {From, To}), State) ->
+    ast_to_ast(?E(Line, call, {[?Atom(Line, lists), ?Atom(Line, seq)], [From, To]}), State);
+
+% X in [a, b], X in 1..10, X in List
+ast_to_ast(?O(Line, 'in', Left, Right), State) ->
+    ast_to_ast(in_to_ast(Line, Left, Right), State);
+
+% loop (I = 0, Acc = []): ... recur(I + 1, [I|Acc]) ... end
+ast_to_ast(?E(Line, loop, {Params, Body}), State) ->
+    loop_to_ast(Line, Params, Body, State);
+
+% Map?.key
+ast_to_ast(?E(Line, access, {Map, Key, nilsafe}), State) ->
+    Counter = maps:get(counter, State, 0),
+    Var = list_to_atom("_Safe" ++ integer_to_list(Counter)),
+    State1 = State#{counter => Counter + 1},
+    with_childs(State1, Key, Map,
+                fun (EKey, EMap) ->
+                        Get = {call, Line, {remote, Line, {atom, Line, maps}, {atom, Line, get}},
+                               [EKey, {var, Line, Var}, {atom, Line, nil}]},
+                        {'case', Line, EMap,
+                         [{clause, Line, [{atom, Line, nil}], [], [{atom, Line, nil}]},
+                          {clause, Line, [{atom, Line, undefined}], [], [{atom, Line, nil}]},
+                          {clause, Line, [{var, Line, Var}], [], [Get]}]}
+                end);
+
+% ?, guard and defer outside of a block of statements
+ast_to_ast(?E(Line, Kind, _), State) when Kind == try_op; Kind == try_stmt; Kind == guard; Kind == defer ->
+    State1 = add_error(State, invalid_statement, Line,
+                       {message, io_lib:format("~p can only be used as a statement (Value? can also be the right side of =)", [Kind])}),
+    {{atom, Line, error}, State1};
 
 % ok(X) -> (ok, X) and err(X) -> (error, X), unless the module defines them
 ast_to_ast(?E(Line, call, {[?Atom(Fun)], [Arg]}), #{user_fns := UserFns}=State)
@@ -733,6 +771,139 @@ interp_part_to_ast1(Line, Expr, State) ->
                  {clause, Line, [V], [],
                   [{call, Line, {remote, Line, {atom, Line, unicode}, {atom, Line, characters_to_binary}}, [V]}]}]}},
     {{bin_element, Line, {call, Line, Convert, [EExpr]}, default, [binary]}, State1}.
+
+% statements that change the rest of the block: Value?, X = Value?, guard and
+% defer, the rest of the statements are moved inside of them
+rewrite_stmts(Nodes) ->
+    case lists:any(fun is_block_stmt/1, Nodes) of
+        true -> rewrite_stmts1(Nodes);
+        false -> Nodes
+    end.
+
+is_block_stmt(?E(_, try_stmt, _)) -> true;
+is_block_stmt(?O(_, '=', _, ?E(_, try_stmt, _))) -> true;
+is_block_stmt(?E(_, guard, _)) -> true;
+is_block_stmt(?E(_, defer, _)) -> true;
+is_block_stmt(_) -> false.
+
+rewrite_stmts1([]) -> [];
+rewrite_stmts1([?E(Line, try_stmt, Expr)|Rest]) ->
+    [try_stmt(Line, Expr, none, Rest)];
+rewrite_stmts1([?O(Line, '=', Pattern, ?E(_, try_stmt, Expr))|Rest]) ->
+    [try_stmt(Line, Expr, Pattern, Rest)];
+rewrite_stmts1([?E(Line, guard, {?O(_, '=', Pattern, Expr), Fail})|Rest]) ->
+    Body = case rewrite_stmts1(Rest) of [] -> [?Atom(Line, ok)]; RestRw -> RestRw end,
+    [?E(Line, switch, {Expr, ?E(Line, 'case', [{cmatch, Line, {[Pattern], nowhen, Body}},
+                                               {celse, Line, [Fail]}])})];
+rewrite_stmts1([?E(Line, guard, {Cond, Fail})|Rest]) ->
+    Body = case rewrite_stmts1(Rest) of [] -> [?Atom(Line, ok)]; RestRw -> RestRw end,
+    [?E(Line, switch, {Cond, ?E(Line, 'case', [{cmatch, Line, {[?V(Line, boolean, true)], nowhen, Body}},
+                                              {celse, Line, [Fail]}])})];
+rewrite_stmts1([?E(_Line, defer, Expr)|[]]) -> [Expr];
+rewrite_stmts1([?E(Line, defer, Expr)|Rest]) ->
+    [?E(Line, 'try', {rewrite_stmts1(Rest), nocatch, [Expr]})];
+rewrite_stmts1([H|T]) -> [H|rewrite_stmts1(T)].
+
+% X = Value? -> case Value of (ok, V): X = V, ...; Other: Other end
+try_stmt(Line, Expr, Pattern, Rest) ->
+    Suffix = integer_to_list(Line) ++ "_" ++ integer_to_list(length(Rest)),
+    Value = ?V(Line, var, list_to_atom("_Ok" ++ Suffix)),
+    Other = ?V(Line, var, list_to_atom("_Other" ++ Suffix)),
+    RestRw = rewrite_stmts1(Rest),
+    OkClause =
+        case Pattern of
+            none ->
+                % (ok, _) or ok, the result is kept if nothing follows
+                IsOk = ?O(Line, 'or', ?O(Line, 'is', Other, ?Atom(Line, ok)),
+                          ?O(Line, 'and', ?E(Line, call, {[?Atom(Line, is_tuple)], [Other]}),
+                             ?O(Line, 'and',
+                                ?O(Line, 'is', ?E(Line, call, {[?Atom(Line, tuple_size)], [Other]}),
+                                   ?V(Line, integer, 2)),
+                                ?O(Line, 'is', ?E(Line, call, {[?Atom(Line, element)], [?V(Line, integer, 1), Other]}),
+                                   ?Atom(Line, ok))))),
+                {cmatch, Line, {[Other], [[IsOk]], case RestRw of [] -> [Other]; _ -> RestRw end}};
+            _ ->
+                Body = [?O(Line, '=', Pattern, Value)|RestRw],
+                {cmatch, Line, {[?S(Line, tuple, [?Atom(Line, ok), Value])], nowhen, Body}}
+        end,
+    ErrClause = {cmatch, Line, {[Other], nowhen, [Other]}},
+    ?E(Line, switch, {Expr, ?E(Line, 'case', [OkClause, ErrClause])}).
+
+in_to_ast(Line, Left, ?S(_, list, [_|_]=Items)) ->
+    case is_simple(Left) of
+        true -> or_chain(Line, [?O(Line, 'is', Left, Item) || Item <- Items]);
+        false -> in_member(Line, Left, ?S(Line, list, Items))
+    end;
+in_to_ast(Line, Left, ?E(_, range, {From, To})) ->
+    case is_simple(Left) of
+        true -> ?O(Line, 'and', ?O(Line, '>=', Left, From), ?O(Line, '<=', Left, To));
+        false -> in_member(Line, Left, ?E(Line, range, {From, To}))
+    end;
+in_to_ast(Line, Left, Right) ->
+    in_member(Line, Left, Right).
+
+in_member(Line, Left, Right) ->
+    ?E(Line, call, {[?Atom(Line, lists), ?Atom(Line, member)], [Left, Right]}).
+
+or_chain(_Line, [Test]) -> Test;
+or_chain(Line, [Test|Tests]) -> ?O(Line, 'or', Test, or_chain(Line, Tests)).
+
+is_simple(?V(_, var, _)) -> true;
+is_simple(?V(_, integer, _)) -> true;
+is_simple(?V(_, atom, _)) -> true;
+is_simple(_) -> false.
+
+loop_to_ast(Line, Params, Body, State) ->
+    Counter = maps:get(counter, State, 0),
+    Name = list_to_atom("_Loop" ++ integer_to_list(Counter)),
+    State0 = State#{counter => Counter + 1},
+    case lists:all(fun (?O(_, '=', _, _)) -> true; (_) -> false end, Params) of
+        false ->
+            State1 = add_error(State0, invalid_loop, Line,
+                               expected_got("loop (Var = InitialValue, ...)", {ast, ?S(Line, tuple, Params)})),
+            {{atom, Line, error}, State1};
+        true ->
+            Patterns = [P || ?O(_, '=', P, _) <- Params],
+            Inits = [I || ?O(_, '=', _, I) <- Params],
+            {EInits, State1} = ast_to_ast(Inits, State0),
+            {EPatterns, State2} = ast_to_ast(Patterns, State1),
+            {EBody, State3} = ast_to_ast(replace_recur(Body, Name), State2),
+            Clause = {clause, Line, EPatterns, [], EBody},
+            {{call, Line, {named_fun, Line, Name, [Clause]}, EInits}, State3}
+    end.
+
+% recur(...) calls the loop, an inner loop has its own recur
+replace_recur(?E(_, loop, _)=Loop, _Name) -> Loop;
+replace_recur(?E(Line, call, {[?Atom(recur)], Args}), Name) ->
+    ?E(Line, call, {[?V(Line, var, Name)], replace_recur(Args, Name)});
+replace_recur(T, Name) when is_tuple(T) ->
+    list_to_tuple(replace_recur(tuple_to_list(T), Name));
+replace_recur(L, Name) when is_list(L) ->
+    [replace_recur(I, Name) || I <- L];
+replace_recur(Other, _Name) -> Other.
+
+% -> and ->> insert the value as the first or last argument, a _ argument
+% is replaced by it instead; => passes the value of an (ok, Value) to the call
+% and stops at the first result that isn't one
+thread_stage({Pos, ?E(CallLine, call, {Fun, Args})}, {Accum, Counter}) when Pos == first; Pos == last ->
+    {?E(CallLine, call, {Fun, thread_args(Pos, Args, Accum)}), Counter};
+thread_stage({result, ?E(CallLine, call, {Fun, Args})}, {Accum, Counter}) ->
+    Suffix = integer_to_list(Counter),
+    Value = ?V(CallLine, var, list_to_atom("_Ok" ++ Suffix)),
+    Other = ?V(CallLine, var, list_to_atom("_Err" ++ Suffix)),
+    Stage = ?E(CallLine, call, {Fun, thread_args(first, Args, Value)}),
+    Switch = ?E(CallLine, switch,
+                {Accum, ?E(CallLine, 'case',
+                           [{cmatch, CallLine, {[?S(CallLine, tuple, [?Atom(CallLine, ok), Value])], nowhen, [Stage]}},
+                            {cmatch, CallLine, {[Other], nowhen, [Other]}}])}),
+    {Switch, Counter + 1}.
+
+thread_args(Pos, Args, Accum) ->
+    case lists:splitwith(fun (?V(_, var, '_')) -> false; (_) -> true end, Args) of
+        {Before, [_|After]} -> Before ++ [Accum|After];
+        {_, []} when Pos == first -> [Accum|Args];
+        {_, []} -> Args ++ [Accum]
+    end.
 
 map_op('=') -> '=';
 map_op('+') -> '+';

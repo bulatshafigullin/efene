@@ -29,11 +29,13 @@ Nonterminals
     e_call e_call_do e_call_thread e_call_thread_funs
     e_assign e_send
     e_bool_and e_comp e_concat e_add e_mul e_unary
-    path path_item e_access.
+    path path_item e_access range_item
+    e_loop.
 
 Terminals
     fn atom var integer float boolean string bstring colon end nl case else match when
     begin receive after try catch for in with coloneq
+    question qdot dotdot fatarrow guard defer loop
     hash open close sep semicolon open_list close_list
     open_map close_map cons_op at arrow arrowend dot larrow larrowend
     assign send_op
@@ -41,6 +43,10 @@ Terminals
     bin_or bin_and bin_shift bin_not bool_not.
 
 Rootsymbol program.
+
+%% the body of an anonymous fn(X) = expr extends as far right as possible (the
+%% conflicts are resolved by shifting, which is that)
+Expect 45.
 
 program -> tl_exprs : '$1'.
 program -> nl tl_exprs : '$2'.
@@ -141,6 +147,10 @@ e_with -> with with_items colon body else colon body end:
 e_with -> with with_items colon body else e_case end:
     {expr, line('$1'), with, {'$2', '$4', '$6'}}.
 
+% loop (I = 0, Acc = []): ... recur(I + 1, [I|Acc]) ... end
+e_loop -> loop colon body end : {expr, line('$1'), loop, {[], '$3'}}.
+e_loop -> loop open seq_items close colon body end : {expr, line('$1'), loop, {'$3', '$6'}}.
+
 e_when -> e_when_cond end : {expr, line('$1'), 'when', ['$1']}.
 e_when -> e_when_cond e_when_elses end : {expr, line('$1'), 'when', ['$1'|'$2']}.
 
@@ -170,6 +180,7 @@ e_bool_and -> e_comp bool_and e_bool_and: op('$2', '$1', '$3').
 e_bool_and -> e_comp: '$1'.
 
 e_comp -> e_concat comp_op e_comp : op('$2', '$1', '$3').
+e_comp -> e_concat in e_concat : {op, line('$2'), 'in', '$1', '$3'}.
 e_comp -> e_concat : '$1'.
 
 e_concat -> e_add concat_op e_concat : op('$2', '$1', '$3').
@@ -193,11 +204,14 @@ e_unary -> add_op literal: unary_op('$1', '$2').
 e_unary -> literal : '$1'.
 
 expr -> bin_or path raw_expr: {tag, line('$1'), '$2', '$3'}.
+expr -> guard e_assign else expr : {expr, line('$1'), guard, {'$2', '$4'}}.
+expr -> defer expr : {expr, line('$1'), defer, '$2'}.
 expr -> raw_expr : '$1'.
 
 raw_expr -> e_switch : '$1'.
 raw_expr -> e_when: '$1'.
 raw_expr -> e_with: '$1'.
+raw_expr -> e_loop: '$1'.
 raw_expr -> e_for: '$1'.
 raw_expr -> e_receive: '$1'.
 raw_expr -> e_try: '$1'.
@@ -205,9 +219,9 @@ raw_expr -> e_send : '$1'.
 raw_expr -> e_call_do : '$1'.
 raw_expr -> e_call_thread : '$1'.
 
-body -> expr: ['$1'].
-body -> expr nl: ['$1'].
-body -> expr nl body : ['$1'|'$3'].
+body -> expr: [stmt('$1')].
+body -> expr nl: [stmt('$1')].
+body -> expr nl body : [stmt('$1')|'$3'].
 
 literal -> hash path raw_literal : {ltag, line('$1'), '$2', '$3'}.
 literal -> raw_literal : '$1'.
@@ -225,6 +239,7 @@ raw_literal -> path_item dot path : dotted_atom(['$1'|'$3']).
 % Map['key'], Map['key', Default], Map.key.other['key']
 raw_literal -> e_access : '$1'.
 raw_literal -> l_var : '$1'.
+raw_literal -> range_item dotdot range_item : {expr, line('$2'), range, {'$1', '$3'}}.
 raw_literal -> l_integer : '$1'.
 raw_literal -> l_float : '$1'.
 raw_literal -> l_boolean : '$1'.
@@ -245,6 +260,20 @@ e_access -> l_var open_list seq_items close_list : access('$1', '$3').
 e_access -> e_access open_list seq_items close_list : access('$1', '$3').
 e_access -> e_access dot l_atom : access('$1', ['$3']).
 
+range_item -> l_integer : '$1'.
+range_item -> l_var : '$1'.
+range_item -> e_call : '$1'.
+range_item -> e_access : '$1'.
+range_item -> open expr close : '$2'.
+
+% Value?, unwraps (ok, Value) or leaves the block with the other value
+raw_literal -> e_call question : {expr, line('$2'), try_op, '$1'}.
+raw_literal -> e_access question : {expr, line('$2'), try_op, '$1'}.
+raw_literal -> l_var question : {expr, line('$2'), try_op, '$1'}.
+
+e_access -> l_var qdot l_atom : access_nil('$1', '$3').
+e_access -> e_access qdot l_atom : access_nil('$1', '$3').
+
 l_atom -> atom : value('$1', atom).
 l_var -> var : value('$1', var).
 l_integer -> integer : value('$1', integer).
@@ -253,6 +282,9 @@ l_boolean -> boolean : value('$1', boolean).
 l_string -> string : string_value('$1', string).
 l_bstring -> bstring : string_value('$1', bstring).
 l_fn -> fn e_case end: expr_raw('$2', fn).
+l_fn -> fn fn_params assign expr:
+    Line = line('$1'),
+    {expr, Line, fn, {expr, Line, 'case', [{cmatch, Line, {'$2', nowhen, ['$4']}}]}}.
 l_fn -> fn l_var e_case end: {expr, line('$1'), fn, {'$2', '$3'}}.
 l_fn_ref -> fn path colon l_integer : {val, line('$1'), fn_ref, {'$2', '$4'}}.
 
@@ -291,6 +323,8 @@ kv_val -> e_bool : '$1'.
 
 kv_item -> kv_key colon kv_val: {kv, line('$1'), '$1', '$3'}.
 kv_item -> kv_key assign kv_val: {kvmatch, line('$1'), '$1', '$3'}.
+kv_item -> kv_key colon: {kv, line('$1'), '$1', pun_var('$1')}.
+kv_item -> kv_key assign: {kvmatch, line('$1'), '$1', pun_var('$1')}.
 
 kv_items -> kv_item: ['$1'].
 kv_items -> kv_item sep: ['$1'].
@@ -301,6 +335,7 @@ attrs -> attr : ['$1'].
 attrs -> attr attrs : ['$1'|'$2'].
 attrs -> attr nl attrs : ['$1'|'$3'].
 
+attr -> at guard : make_attr(line('$1'), [{val, line('$2'), atom, guard}], noparams, noresult).
 attr -> at path : make_attr(line('$1'), '$2', noparams, noresult).
 attr -> at path arrow e_bool : make_attr(line('$1'), '$2', noparams, '$4').
 attr -> at path open seq_items close : make_attr(line('$1'), '$2', '$4', noresult).
@@ -318,6 +353,9 @@ e_call_thread -> literal e_call_thread_funs : {expr, line('$1'), call_thread, {'
 
 e_call_thread_funs -> arrow e_call : [{first, '$2'}].
 e_call_thread_funs -> arrowend e_call : [{last, '$2'}].
+% Result => f() => g(1): stops at the first error, the stages get the ok value
+e_call_thread_funs -> fatarrow e_call : [{result, '$2'}].
+e_call_thread_funs -> fatarrow e_call e_call_thread_funs : [{result, '$2'}|'$3'].
 e_call_thread_funs -> arrow e_call e_call_thread_funs : [{first, '$2'}|'$3'].
 e_call_thread_funs -> arrowend e_call e_call_thread_funs : [{last, '$2'}|'$3'].
 
@@ -399,6 +437,24 @@ dotted_atom([First|_]) ->
 map_update({val, _, var, _}=Base, {seq, Line, map, Items}) -> {seq, Line, map, {Base, Items}};
 map_update({expr, _, access, _}=Base, {seq, Line, map, Items}) -> {seq, Line, map, {Base, Items}};
 map_update(Base, _) -> return_error(line(Base), "only a variable or a map access can be updated with #{}").
+
+% Value? and X = Value? are statements only in a body, see fn_to_erl:rewrite_stmts/1
+stmt({expr, Line, try_op, Expr}) -> {expr, Line, try_stmt, Expr};
+stmt({op, Line, '=', Pattern, {expr, _, try_op, Expr}}) -> {op, Line, '=', Pattern, {expr, Line, try_stmt, Expr}};
+stmt(Other) -> Other.
+
+access_nil(Map, Key) -> {expr, line(Map), access, {Map, Key, nilsafe}}.
+
+% {id:, user_name:} is {id: Id, user_name: UserName}
+pun_var({val, Line, atom, Name}) ->
+    Parts = string:split(atom_to_list(Name), "_", all),
+    Camel = lists:append([capitalize(P) || P <- Parts]),
+    {val, Line, var, list_to_atom(Camel)};
+pun_var(Other) ->
+    return_error(line(Other), "only atom keys can be written without a value").
+
+capitalize([]) -> [];
+capitalize([C|Rest]) -> [string:to_upper(C)|Rest].
 
 access(Map, [Key]) -> {expr, line(Map), access, {Map, Key, nodefault}};
 access(Map, [Key, Default]) -> {expr, line(Map), access, {Map, Key, Default}};
