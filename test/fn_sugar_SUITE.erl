@@ -3,7 +3,8 @@
 
 all() -> [comments, consts, guard_fns, fn_shorthand, default_arguments,
           interpolation, ok_err, with, with_else, try_bang, piped_match,
-          map_access, multiple_arities, error_paths, formatter_keeps_meaning].
+          map_access, multiple_arities, heredoc, map_update, with_guard, literal_interpolation,
+          spec_sugar, reserved_words, error_paths, formatter_keeps_meaning].
 
 init_per_suite(Config) ->
     OutDir = filename:join(proplists:get_value(priv_dir, Config), "sugar"),
@@ -81,6 +82,28 @@ multiple_arities(_Config) ->
     {one, 1} = sugar:arities(1),
     {two, 1, 2} = sugar:arities(1, 2),
     {two_zero, 1} = sugar:arities(1, 0).
+
+heredoc(_Config) ->
+    "Hello bob,\n  indented \"quoted\"\nbye" = sugar:heredoc("bob"),
+    <<"raw 'q'">> = sugar:heredoc_bin().
+
+map_update(_Config) ->
+    P = #{user => #{name => <<"x">>, id => 1}},
+    #{name := <<"new">>, id := 1} = sugar:update_deep(P),
+    #{a := 1} = sugar:update_var(P).
+
+with_guard(_Config) ->
+    big = sugar:with_guard({ok, 11}),
+    small = sugar:with_guard({ok, 1}).
+
+literal_interpolation(_Config) ->
+    <<"1-2.5-abc">> = sugar:lits().
+
+spec_sugar(_Config) ->
+    {ok, 1} = sugar:spec_sugar(1).
+
+reserved_words(_Config) ->
+    {'def', 'cond', 'let', 'of', 'if'} = sugar:reserved_words().
 
 error_paths(Config) ->
     Dir = filename:join(proplists:get_value(data_dir, Config), "bad"),

@@ -93,3 +93,38 @@ fn arities
   case A: (one, A)
   case A, B: (two, A, B)
 end
+
+fn heredoc
+  case Name:
+    """
+      Hello #{Name},
+        indented "quoted"
+      bye
+    """
+end
+
+fn heredoc_bin
+  case:
+    '''
+    raw 'q'
+    '''
+end
+
+fn update_deep(P) = P.user#{name: 'new'}
+fn update_var(P) = P#{a: 1}
+
+fn with_guard
+  case X:
+    with (ok, N) = X when N > 10: big
+    else: small
+    end
+end
+
+fn lits case: '#{1}-#{2.5}-#{abc}' end
+
+fn spec_sugar
+  @spec(ok(integer())) -> ok(atom()) or err(term())
+  case X: ok(X)
+end
+
+fn reserved_words case: (def, cond, let, of, if) end

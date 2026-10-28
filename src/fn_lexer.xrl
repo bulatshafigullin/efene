@@ -69,6 +69,8 @@ Comment     = ##[^\n]*
 At          = @
 
 % string stuff
+HString     = \"\"\"([^\"]|\"[^\"]|\"\"[^\"])*\"\"\"
+HBString    = '''([^']|'[^']|''[^'])*'''
 String      = "(\\\^.|\\.|[^\"])*"
 BString     = '(\\\^.|\\.|[^\'])*'
 AtomString  = `(\\\^.|\\.|[^\`])*`
@@ -134,6 +136,8 @@ Rules.
 {FatArrow}               : make_token(fatarrow,     TokenLine, TokenChars).
 
 % string stuff
+{HString}                : build_heredoc(string, TokenChars, TokenLine, TokenLen).
+{HBString}               : build_heredoc(bstring, TokenChars, TokenLine, TokenLen).
 {String}                 : build_string(string, TokenChars, TokenLine, TokenLen).
 {BString}                : build_string(bstring, TokenChars, TokenLine, TokenLen).
 
@@ -179,7 +183,6 @@ is_reserved("else")    -> true;
 is_reserved("end")     -> true;
 is_reserved("fn")      -> true;
 is_reserved("for")     -> true;
-is_reserved("if")      -> true;
 is_reserved("in")      -> true;
 is_reserved("match")   -> true;
 is_reserved("receive") -> true;
@@ -187,11 +190,7 @@ is_reserved("try")     -> true;
 is_reserved("when")    -> true;
 is_reserved("with")    -> true;
 
-is_reserved("def")     -> true;
 
-is_reserved("cond")    -> true;
-is_reserved("let")     -> true;
-is_reserved("of")      -> true;
 
 is_reserved(_)         -> false.
 
@@ -199,8 +198,33 @@ build_atom_string(Chars, Line, Len) ->
   String = unescape_string(lists:sublist(Chars, 2, Len - 2), Line),
   {token, {atom, Line, list_to_atom(String)}}.
 
+build_heredoc(Type, Chars, Line, Len) ->
+  Raw = dedent(lists:sublist(Chars, 4, Len - 6)),
+  string_token(Type, Raw, Line).
+
+% triple quoted text: the first line is dropped if it's empty, so is the last
+% one (where the closing quotes are), and the common indentation is removed
+dedent(Raw) ->
+  Lines0 = string:split(Raw, "\n", all),
+  Lines1 = case Lines0 of
+             [First|Rest] -> case blank(First) of true -> Rest; false -> Lines0 end;
+             [] -> []
+           end,
+  Lines2 = case lists:reverse(Lines1) of
+             [Last|RevRest] -> case blank(Last) of true -> lists:reverse(RevRest); false -> Lines1 end;
+             [] -> []
+           end,
+  Indent = lists:min([length(lists:takewhile(fun is_ws/1, L)) || L <- Lines2, not blank(L)] ++ [1000]),
+  Stripped = [case blank(L) of true -> ""; false -> lists:nthtail(Indent, L) end || L <- Lines2],
+  string:join(Stripped, "\n").
+
+is_ws(C) -> C == $\s orelse C == $\t.
+blank(L) -> lists:all(fun is_ws/1, L).
+
 build_string(Type, Chars, Line, Len) ->
-  Raw = lists:sublist(Chars, 2, Len - 2),
+  string_token(Type, lists:sublist(Chars, 2, Len - 2), Line).
+
+string_token(Type, Raw, Line) ->
   case split_interpolation(Raw, Line, [], []) of
     [{lit, String}] -> {token, {Type, Line, String}};
     Parts -> {token, {Type, Line, {interp, Parts}}}

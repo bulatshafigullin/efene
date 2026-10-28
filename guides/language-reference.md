@@ -1007,6 +1007,10 @@ With *../libs/text/upper.fn* a call to **text.upper.up("hi")** compiles that fil
     else: (error, unavailable)
     end
 
+    with (ok, N) = f() when N > 0: N end
+
+A `when` guard after a clause makes a failed guard take the `else` path, variables bound in the clauses are not visible in `else`.
+
     with (ok, X) = f():
       X
     else
@@ -1079,6 +1083,22 @@ A function marked `@guard` with one case and one expression is expanded in guard
     Roles = Body['roles', []]
     First = Body['items'].first
 
+Any variable or map access can be updated with `#{}`: `Principal.user#{name: 'new'}`.
+
+### Multiline Strings
+
+Triple quotes (`"""` for list strings, `'''` for binary strings) keep line breaks and quotes. The first and last lines are dropped when they are empty and the common indentation is removed, interpolation works as in normal strings:
+
+    Query = '''
+      SELECT *
+        FROM users
+       WHERE name = '#{Name}'
+    '''
+
+### Types
+
+`ok(T)` and `err(T)` can be used in types: `@spec(integer()) -> ok(atom()) or err(term())`.
+
 ### Threading in Match
 
 The value of a `match` can be a threaded call: `match L -> lists.reverse(): ... end`.
@@ -1147,7 +1167,7 @@ Defines the types of function arguments and return type for current function.
 
     @export(hello/0, plus/2)
 
-Exports the functions to be used from other modules, functions are public so it's not needed for them.
+Functions are always exported, this attribute is accepted but not needed.
 
 ##### Export Type
 

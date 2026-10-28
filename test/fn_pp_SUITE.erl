@@ -81,7 +81,7 @@ values(Config) ->
     "`receive`" = ?AstNode(v_atom_receive),
     "`try`" = ?AstNode(v_atom_try),
     "`when`" = ?AstNode(v_atom_when),
-    "`def`" = ?AstNode(v_atom_def),
+    "def" = ?AstNode(v_atom_def),
     "`cond`" = ?AstNode(v_atom_cond),
     "`let`" = ?AstNode(v_atom_let),
     "`of`" = ?AstNode(v_atom_of),

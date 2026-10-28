@@ -57,8 +57,15 @@ parse_type_value(?E(Line, call, {[?Atom('fun')], [?S(ALine, list, Args), Return]
     {EReturn, State1} = parse_type_value(Return, State),
     {EArgs, State2} = parse_types(Args, State1),
     {{type, Line, 'fun', [{type, ALine, product, EArgs}, EReturn]}, State2};
+% type ok(<type>) and err(<type>) are (ok, <type>) and (error, <type>)
+parse_type_value(?E(Line, call, {[?Atom(Name)], [Arg]}), State)
+  when Name == ok orelse Name == err ->
+    {EArg, State1} = parse_type_value(Arg, State),
+    Tag = case Name of ok -> ok; err -> error end,
+    {{type, Line, tuple, [{atom, Line, Tag}, EArg]}, State1};
 % type <atom>(<type>*)
 parse_type_value(?E(Line, call, {[?Atom(Name)], Args}), State) ->
+
     {EArgs, State1} = parse_types(Args, State),
     {{type, Line, Name, EArgs}, State1};
 % type <atom>.<atom>(<type>*)

@@ -598,7 +598,7 @@ substitute_vars(Other, _Bindings) -> Other.
 
 % default arguments: fn f case A, B := 1, C := 2: ... end defines f/1 and f/2
 % calling f/3 with the defaults
-expand_defaults(Line, Name, Attrs, [{cmatch, _, {Params, _, _}}|_]=Cases) ->
+expand_defaults(Line, Name, _Attrs, [{cmatch, _, {Params, _, _}}|_]=Cases) ->
     {Required, Optional} = lists:splitwith(fun (P) -> not is_default(P) end, Params),
     case Optional of
         [] -> nodefaults;
@@ -679,7 +679,14 @@ with_items([?O(Line, '=', Pattern, Expr)|T], Body, Fail, State) ->
     {EPattern, State2} = ast_to_ast(Pattern, State1),
     {Inner, State3} = with_items(T, Body, Fail, State2),
     {[{'case', Line, EExpr, [{clause, Line, [EPattern], [], Inner}, Fail(Line)]}], State3};
+with_items([{with_when, _GLine, ?O(Line, '=', Pattern, Expr), Guard}|T], Body, Fail, State) ->
+    {EExpr, State1} = ast_to_ast(Expr, State),
+    {EPattern, State2} = ast_to_ast(Pattern, State1),
+    {EGuard, State3} = when_to_ast([[Guard]], State2),
+    {Inner, State4} = with_items(T, Body, Fail, State3),
+    {[{'case', Line, EExpr, [{clause, Line, [EPattern], EGuard, Inner}, Fail(Line)]}], State4};
 with_items([Expr|T], Body, Fail, State) ->
+
     {EExpr, State1} = ast_to_ast(Expr, State),
     {Rest, State2} = with_items(T, Body, Fail, State1),
     {[EExpr|Rest], State2}.
@@ -697,8 +704,22 @@ interp_to_ast(Line, Type, Parts, State) ->
 
 interp_part_to_ast(Line, {lit, String}, State) ->
     {{bin_element, Line, {string, Line, String}, default, default}, State};
+interp_part_to_ast(Line, ?V(_, integer, I), State) ->
+    interp_part_to_ast(Line, {lit, integer_to_list(I)}, State);
+interp_part_to_ast(Line, ?V(_, float, F), State) ->
+    interp_part_to_ast(Line, {lit, float_to_list(F, [short])}, State);
+interp_part_to_ast(Line, ?V(_, atom, A) = Expr, State) ->
+    Str = atom_to_list(A),
+    case lists:all(fun (C) -> C < 256 end, Str) of
+        true -> interp_part_to_ast(Line, {lit, Str}, State);
+        false -> interp_part_to_ast1(Line, Expr, State)
+    end;
 interp_part_to_ast(Line, Expr, State) ->
+    interp_part_to_ast1(Line, Expr, State).
+
+interp_part_to_ast1(Line, Expr, State) ->
     {EExpr, State1} = ast_to_ast(Expr, State),
+
     V = {var, Line, '_Interp'},
     Guarded = fun (Test, Result) ->
                       {clause, Line, [V], [[{call, Line, {atom, Line, Test}, [V]}]], [Result]}

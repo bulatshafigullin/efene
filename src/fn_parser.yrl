@@ -29,8 +29,7 @@ Nonterminals
     e_call e_call_do e_call_thread e_call_thread_funs
     e_assign e_send
     e_bool_and e_comp e_concat e_add e_mul e_unary
-    path path_item e_access
-    e_def_tl.
+    path path_item e_access.
 
 Terminals
     fn atom var integer float boolean string bstring colon end nl case else match when
@@ -39,8 +38,7 @@ Terminals
     open_map close_map cons_op at arrow arrowend dot larrow larrowend
     assign send_op
     bool_or bool_orr bool_xor bool_and bool_andd comp_op concat_op add_op mul_op
-    bin_or bin_and bin_shift bin_not bool_not
-    def.
+    bin_or bin_and bin_shift bin_not bool_not.
 
 Rootsymbol program.
 
@@ -52,7 +50,6 @@ tl_exprs -> tl_expr nl tl_exprs : ['$1'|'$3'].
 
 tl_expr -> e_fn_tl: '$1'.
 tl_expr -> attr: '$1'.
-tl_expr -> e_def_tl: '$1'.
 tl_expr -> expr: '$1'.
 
 e_fn_tl -> fn l_atom e_case end:
@@ -78,35 +75,6 @@ e_fn_tl -> fn l_atom fn_params attrs assign expr:
 
 fn_params -> open close : [].
 fn_params -> open seq_items close : '$2'.
-
-e_def_tl -> def l_atom colon e_case end:
-    Name = '$2',
-    Args = [],
-    Attrs = [],
-    Cases = '$4',
-    {expr, line('$1'), def, {Name, Args, Attrs, Cases}}.
-
-e_def_tl -> def l_atom colon attrs e_case end:
-    Name = '$2',
-    Args = [],
-    Attrs = '$4',
-    Cases = '$5',
-    {expr, line('$1'), def, {Name, Args, Attrs, Cases}}.
-
-e_def_tl -> def l_atom seq_items colon e_case end:
-    Name = '$2',
-    Args = '$3',
-    Attrs = [],
-    Cases = '$5',
-    {expr, line('$1'), def, {Name, Args, Attrs, Cases}}.
-
-e_def_tl -> def l_atom seq_items colon attrs e_case end:
-    Name = '$2',
-    Args = '$3',
-    Attrs = '$5',
-    Cases = '$6',
-    {expr, line('$1'), def, {Name, Args, Attrs, Cases}}.
-
 
 e_else_only_case -> e_case_else : {expr, line('$1'), 'case', ['$1']}.
 e_else_only_case -> e_case : '$1'.
@@ -161,6 +129,8 @@ e_try -> try send_op expr else expr:
     {expr, Line, 'try', {['$3'], Catch, noafter}}.
 
 % with Pattern = Expr; ...: body [else: body | else case ...] end
+with_items -> e_assign when e_bool : [{with_when, line('$2'), '$1', '$3'}].
+with_items -> e_assign when e_bool semicolon with_items : [{with_when, line('$2'), '$1', '$3'}|'$5'].
 with_items -> e_assign : ['$1'].
 with_items -> e_assign semicolon with_items : ['$1'|'$3'].
 
@@ -311,9 +281,9 @@ seq_items -> e_assign sep seq_items : ['$1'|'$3'].
 l_map -> open_map close_map: seq_value([], line('$1'), map).
 l_map -> open_map kv_items close_map: seq_value('$2', line('$1'), map).
 
-l_map_update -> l_var hash l_map :
-    {seq, Line, map, Items} = '$3',
-    {seq, Line, map, {'$1', Items}}.
+l_map_update -> l_var hash l_map : map_update('$1', '$3').
+l_map_update -> e_access hash l_map : map_update('$1', '$3').
+l_map_update -> path_item dot path hash l_map : map_update(dotted_atom(['$1'|'$3']), '$5').
 
 
 kv_key -> literal : '$1'.
@@ -425,6 +395,10 @@ dotted_atom([{val, Line, atom, _}|_]=Items) ->
     end;
 dotted_atom([First|_]) ->
     return_error(line(First), "only atoms can be joined with dots").
+
+map_update({val, _, var, _}=Base, {seq, Line, map, Items}) -> {seq, Line, map, {Base, Items}};
+map_update({expr, _, access, _}=Base, {seq, Line, map, Items}) -> {seq, Line, map, {Base, Items}};
+map_update(Base, _) -> return_error(line(Base), "only a variable or a map access can be updated with #{}").
 
 access(Map, [Key]) -> {expr, line(Map), access, {Map, Key, nodefault}};
 access(Map, [Key, Default]) -> {expr, line(Map), access, {Map, Key, Default}};
