@@ -57,6 +57,18 @@ parse_type_value(?E(Line, call, {[?Atom('fun')], [?S(ALine, list, Args), Return]
     {EReturn, State1} = parse_type_value(Return, State),
     {EArgs, State2} = parse_types(Args, State1),
     {{type, Line, 'fun', [{type, ALine, product, EArgs}, EReturn]}, State2};
+% type map() is any map
+parse_type_value(?E(Line, call, {[?Atom(map)], []}), State) ->
+    {{type, Line, map, any}, State};
+% type {key: <type>, ...} is a map with those required keys, {} the empty map
+parse_type_value(?S(Line, map, KVs), State) when is_list(KVs) ->
+    {Fields, State1} = lists:mapfoldl(
+        fun ({kv, FLine, Key, Val}, StateIn) ->
+                {EKey, StateOut1} = parse_type_value(Key, StateIn),
+                {EVal, StateOut2} = parse_type_value(Val, StateOut1),
+                {{type, FLine, map_field_exact, [EKey, EVal]}, StateOut2}
+        end, State, KVs),
+    {{type, Line, map, Fields}, State1};
 % type ok(<type>) and err(<type>) are (ok, <type>) and (error, <type>)
 parse_type_value(?E(Line, call, {[?Atom(Name)], [Arg]}), State)
   when Name == ok orelse Name == err ->

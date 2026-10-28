@@ -4,7 +4,7 @@
 all() -> [comments, consts, guard_fns, fn_shorthand, default_arguments,
           interpolation, ok_err, with, with_else, try_bang, piped_match,
           map_access, multiple_arities, heredoc, map_update, with_guard, literal_interpolation,
-          spec_sugar, reserved_words, error_paths, formatter_keeps_meaning].
+          spec_sugar, map_types_and_empty_specs, reserved_words, error_paths, formatter_keeps_meaning].
 
 init_per_suite(Config) ->
     OutDir = filename:join(proplists:get_value(priv_dir, Config), "sugar"),
@@ -101,6 +101,12 @@ literal_interpolation(_Config) ->
 
 spec_sugar(_Config) ->
     {ok, 1} = sugar:spec_sugar(1).
+
+map_types_and_empty_specs(Config) ->
+    {ok, Forms} = efene:to_mod(proplists:get_value(src, Config)),
+    [{type, _, map, [{type, _, map_field_exact, _}, _, _]}] =
+        [T || {attribute, _, type, {user, T, []}} <- Forms],
+    [_] = [S || {attribute, _, spec, {{no_args_spec, 0}, S}} <- Forms].
 
 reserved_words(_Config) ->
     {'def', 'cond', 'let', 'of', 'if'} = sugar:reserved_words().

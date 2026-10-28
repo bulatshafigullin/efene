@@ -1097,7 +1097,7 @@ Triple quotes (`"""` for list strings, `'''` for binary strings) keep line break
 
 ### Types
 
-`ok(T)` and `err(T)` can be used in types: `@spec(integer()) -> ok(atom()) or err(term())`.
+`ok(T)` and `err(T)` can be used in types: `@spec(integer()) -> ok(atom()) or err(term())`. Maps with required keys are written `{id: integer(), name: binary() or nil}`, `map()` is any map and `@spec -> T` is the spec of a function without arguments.
 
 ### Threading in Match
 

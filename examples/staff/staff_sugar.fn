@@ -3,16 +3,24 @@
 @const(TTL_SECONDS) -> 12 * 3600
 @const(TABLE) -> moderation_staff_sessions
 
+@type(principal) -> {id: binary(), roles: [binary()], name: binary() or nil}
+@export_type(principal/0)
+
 fn ttl_seconds
   @doc("Cookie lifetime, for Max-Age -- Django's session expires on the same clock.")
+  @spec -> pos_integer()
   case: #m TTL_SECONDS
 end
 
 fn login
-  @doc("Sign in through Django. Every bad login is invalid_credentials alike, so the console
-    can't tell a guesser which half was wrong.
-    -> ok(Session, Principal) | err(invalid_credentials | forbidden | unavailable)
-     | (error, rate_limited, RetryAfter)")
+  @doc("""
+    Sign in through Django. Every bad login is invalid_credentials alike, so the
+    console can't tell a guesser which half was wrong.
+    """)
+  @spec(binary(), binary(), map()) ->
+    (ok, binary(), principal()) or
+    err(invalid_credentials or forbidden or unavailable) or
+    (error, rate_limited, pos_integer())
   case Login, Password, Meta := {} when is_binary(Login), is_binary(Password):
     Ip = maps.get(ip, Meta, undefined)
     match moderation.login_throttle.check(Ip, Login):
@@ -44,6 +52,7 @@ end
 
 fn principal
   @doc("The principal behind a cookie value, or error (unknown, ended, or Django unreachable).")
+  @spec(binary() or nil) -> ok(principal()) or error
   case Session when is_session(Session):
     match cached(Session):
       case ok(_) = Hit: Hit
@@ -59,8 +68,11 @@ fn principal
 end
 
 fn counts
-  @doc("The tab badges of the console in one answer, cached a few seconds.
-    A session that is not a moderator's gets error, as in principal/1.")
+  @doc("""
+    The tab badges of the console in one answer, cached a few seconds.
+    A session that is not a moderator's gets error, as in principal/1.
+    """)
+  @spec(binary() or nil) -> ok(map()) or error or err(unavailable)
   case Session when is_session(Session):
     with ok({roles = [_ :: _]}) = principal(Session):
       Key = counts_key(Session)
@@ -82,6 +94,7 @@ end
 
 fn logout
   @doc("End the session. Idempotent; a failure to reach Django is logged, never raised.")
+  @spec(binary() or nil) -> ok
   case Session when is_session(Session):
     Who = cached(Session)
     forget(Session)
@@ -97,6 +110,7 @@ fn logout
 end
 
 fn sweep
+  @spec -> ok
   case:
     Now = clock()
     try! ets.select_delete(#m TABLE, [((`_`, `_`, `$1`), [(`<`, `$1`, Now)], [true])]) else ok
@@ -104,6 +118,7 @@ fn sweep
 end
 
 fn reset
+  @spec -> ok
   case:
     try! ets.delete_all_objects(#m TABLE) else ok
     ok
@@ -112,9 +127,13 @@ end
 fn is_session @guard case S: is_binary(S) and S != '' end
 
 fn django
-  @doc("One call to Django: ok(Body) on 200, the console-level errors for the statuses Django
-    uses on purpose, unavailable for anything else (down, misconfigured, a 5xx) -- which must
-    not read as wrong password. Only Django's own 401 is wrong login; a 400 never reached the check.")
+  @doc("""
+    One call to Django: ok(Body) on 200, the console-level errors for the
+    statuses Django uses on purpose, unavailable for anything else (down,
+    misconfigured, a 5xx) -- which must not read as wrong password.
+    Only Django's own 401 is wrong login; a 400 never reached the check.
+    """)
+  @spec(binary(), map()) -> ok(map()) or err(invalid_credentials or forbidden or unavailable)
   case Action, Payload:
     with ok(Base) = config(staff_url); ok(Key) = config(internal_api_key):
       post(Action, Payload, Base, Key)

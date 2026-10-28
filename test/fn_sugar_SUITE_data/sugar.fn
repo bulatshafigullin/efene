@@ -128,3 +128,10 @@ fn spec_sugar
 end
 
 fn reserved_words case: (def, cond, let, of, if) end
+
+@type(user) -> {id: integer(), name: binary() or nil, extra: map()}
+
+fn no_args_spec
+  @spec -> ok(user())
+  case: ok({})
+end

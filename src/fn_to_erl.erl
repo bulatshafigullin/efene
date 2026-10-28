@@ -1005,6 +1005,8 @@ extract_spec_attr(FnRef, [{attr, Line, Name, Params, Result}|T],
     EAttr = {tuple, Line, [EName, {tuple, Line, [EParams, EResult]}]},
     extract_spec_attr(FnRef, T, [EAttr|Accum], SpecAttr, State4).
 
+parse_spec_attr(FnRef, {attr, Line, [?Atom(spec)=SpecName], noparams, Return}, State) ->
+    parse_spec_attr(FnRef, {attr, Line, [SpecName], [], Return}, State);
 parse_spec_attr({?Atom(Name), Arity}, {attr, Line, [?Atom(spec)], Args, Return},
                 State) ->
     fn_spec:parse_spec_attr(Name, Arity, Line, Args, Return, State).
