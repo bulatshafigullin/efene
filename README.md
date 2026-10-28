@@ -2,7 +2,7 @@
 
 Alternative syntax for the Erlang Programming Language focusing on simplicity, ease of use and programmer UX.
 
-Visit [efene.org](https://efene.org) for documentation and [quickstart](guides/quickstart.md)
+Visit [efene.org](https://efene.org) for documentation and [quickstart](guides/quickstart.md), LLMs and coding agents should read [guides/llm-reference.md](guides/llm-reference.md) first (also indexed in [llms.txt](llms.txt))
 
 ## Build
 

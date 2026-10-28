@@ -6,7 +6,7 @@ all() -> [comments, consts, guard_fns, fn_shorthand, default_arguments,
           map_access, multiple_arities, heredoc, map_update, with_guard, literal_interpolation,
           spec_sugar, map_types_and_empty_specs, reserved_words,
           try_operator, guard_stmt, defer_stmt, punning, lambda_shorthand, ranges_and_in,
-          loop_recur, result_pipe, optional_chaining, pipe_placeholder, error_paths, formatter_keeps_meaning].
+          loop_recur, result_pipe, optional_chaining, pipe_placeholder, llm_guide_example, error_paths, formatter_keeps_meaning].
 
 init_per_suite(Config) ->
     OutDir = filename:join(proplists:get_value(priv_dir, Config), "sugar"),
@@ -152,6 +152,18 @@ optional_chaining(_Config) ->
 
 pipe_placeholder(_Config) ->
     [1, 2, 3] = sugar:place(3).
+
+llm_guide_example(Config) ->
+    Out = filename:join(proplists:get_value(priv_dir, Config), "llm"),
+    ok = filelib:ensure_path(Out),
+    true = code:add_patha(Out),
+    Src = filename:join(proplists:get_value(data_dir, Config), "llm_example.fn"),
+    {ok, _} = efene:compile(Src, Out, []),
+    {ok, #{id := 5}} = llm_example:parse(<<"5">>),
+    {error, empty} = llm_example:parse(<<>>),
+    {error, bad_id} = llm_example:parse(<<"x">>),
+    [<<"item 3">>] = llm_example:names([<<"3">>, <<"20">>, <<"x">>]),
+    10 = llm_example:sum_to(4).
 
 reserved_words(_Config) ->
     {'def', 'cond', 'let', 'of', 'if'} = sugar:reserved_words().

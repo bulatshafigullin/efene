@@ -1,0 +1,25 @@
+@const(LIMIT) -> 10
+@type(item) -> {id: integer(), name: binary()}
+
+fn is_small @guard case N: N < #m LIMIT end
+
+fn parse
+  @spec(binary()) -> ok(item()) or err(atom())
+  case Text:
+    guard Text != '' else err(empty)
+    Id = try! binary_to_integer(Text) else -1
+    guard Id > 0 else err(bad_id)
+    ok({id: Id, name: 'item #{Id}'})
+end
+
+fn names
+  case Texts:
+    Parsed = for T in Texts: parse(T) end
+    for (ok, I) in Parsed; when is_small(I.id): I.name end
+end
+
+fn sum_to(N) = loop (I = 1, Acc = 0):
+  when I > N: Acc
+  else: recur(I + 1, Acc + I)
+  end
+end

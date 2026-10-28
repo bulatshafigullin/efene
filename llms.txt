@@ -1,0 +1,10 @@
+# efene
+
+> Efene is a syntax for Erlang/BEAM (`.fn` files compiled to Erlang abstract forms) with maps/tuples/pattern matching, `match`/`when`, pipes, `with`, `guard`, `?`, `defer`, default arguments, string interpolation and compile time execution. Every Erlang/OTP library can be used.
+
+Read first when writing or reviewing efene code:
+
+- [Efene Reference for LLMs](guides/llm-reference.md): exact syntax, new sugar, idioms and a table of common mistakes
+- [Language Reference](guides/language-reference.md): complete reference
+- [Staff example](examples/staff/staff_sugar.fn): realistic module using most of the language
+- [Tests of the sugar](test/fn_sugar_SUITE_data/sugar.fn): small runnable examples of each feature

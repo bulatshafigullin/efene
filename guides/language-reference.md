@@ -1147,7 +1147,10 @@ A `_` argument in a `->` call is replaced by the value instead of adding it as t
 
 `X in [a, b, c]` and `X in 1..10` can be used in guards (X must be a variable or a literal, in other cases and for other values on the right it calls `lists.member`):
 
-    fn kind case X when X in [a, b]: letter else X when X in 0..9: digit end
+    fn kind
+      case X when X in [a, b]: letter
+      case X when X in 0..9: digit
+    end
 
 ### Map Shorthands
 
